@@ -16,13 +16,16 @@ import type {
   Sensor,
   SensorStatus,
   WebhookDelivery,
+  WebhookTarget,
 } from "@unifi-sensor-latch/shared";
 import {
   DURATION_PRESETS,
+  buildConsoleWebhookUrl,
   conditionSummary,
   effectiveInterval,
   isDurationValid,
   validateCondition,
+  validateWebhookTarget,
 } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { metricUnitSuffix, toDisplayCondition, toStoredValue } from "@/lib/units";
@@ -44,6 +47,45 @@ type RuleRow = Omit<Latch, "webhook" | "resolvedWebhook"> & {
 type ConditionType = "above" | "below" | "between";
 type HysteresisMode = "manual" | "auto";
 
+// Form-local shape for one webhook (fired or resolved) — flat so every
+// field has a plain string/select-friendly value regardless of which
+// WebhookTarget kind is selected; buildWebhookTarget below narrows it
+// back down to the real union on submit. "console" is the default kind:
+// it's this app's primary intended path (SPEC.md section 7 — Protect's
+// own Alarm Manager does the actual notification delivery), not just one
+// option among equals.
+interface WebhookFormValue {
+  kind: "console" | "custom";
+  consoleId: string;
+  webhookId: string;
+  url: string;
+  method: "GET" | "POST";
+  bearerToken: string; // never prefilled on edit — see openEditDialog
+}
+
+function emptyWebhookFormValue(): WebhookFormValue {
+  return { kind: "console", consoleId: "", webhookId: "", url: "", method: "POST", bearerToken: "" };
+}
+
+// bearerToken is deliberately left blank even when editing an existing
+// custom webhook that has one — GET /api/latches always masks it (see
+// latchRedaction.ts), so there's no real value to prefill; the field's
+// placeholder explains that blank means "keep the existing token."
+function webhookFormValueFromTarget(target: WebhookTarget | undefined): WebhookFormValue {
+  if (!target) return emptyWebhookFormValue();
+  if (target.kind === "console") {
+    return { kind: "console", consoleId: target.consoleId, webhookId: target.webhookId, url: "", method: "POST", bearerToken: "" };
+  }
+  return { kind: "custom", consoleId: "", webhookId: "", url: target.url, method: target.method, bearerToken: "" };
+}
+
+function buildWebhookTarget(v: WebhookFormValue): WebhookTarget {
+  if (v.kind === "console") {
+    return { kind: "console", consoleId: v.consoleId, webhookId: v.webhookId };
+  }
+  return { kind: "custom", url: v.url, method: v.method, bearerToken: v.bearerToken || undefined };
+}
+
 const emptyForm = {
   sensorId: "",
   metric: "" as Sensor["metrics"][number] | "",
@@ -57,9 +99,9 @@ const emptyForm = {
   clearHigh: "", // between manual
   marginPercent: "", // between auto
   durationSeconds: "" as number | "",
-  webhookUrl: "",
-  webhookMethod: "POST" as Latch["webhook"]["method"],
-  resolvedWebhookUrl: "",
+  webhook: emptyWebhookFormValue(),
+  resolvedWebhookEnabled: false,
+  resolvedWebhook: emptyWebhookFormValue(),
   enabled: true,
 };
 
@@ -97,6 +139,125 @@ function conditionToFormFields(condition: RuleCondition): Partial<FormState> {
 
 function deliveryBadgeVariant(delivery: WebhookDelivery): "good" | "fired" {
   return delivery.ok ? "good" : "fired";
+}
+
+function consoleWebhookLabel(target: Extract<WebhookTarget, { kind: "console" }>, consoles: ProtectConsole[]): string {
+  const name = consoles.find((c) => c.id === target.consoleId)?.name ?? "unknown console";
+  return `Console: ${name} / ${target.webhookId}`;
+}
+
+// Shared by the fired and resolved webhook sections of the rule form —
+// same kind/console/URL/token fields either way, just a different label
+// prefix and value/onChange pair.
+function WebhookFieldsEditor({
+  label,
+  value,
+  onChange,
+  consoles,
+  editing,
+}: {
+  label: string;
+  value: WebhookFormValue;
+  onChange: (next: WebhookFormValue) => void;
+  consoles: ProtectConsole[];
+  editing: boolean;
+}) {
+  const selectedConsole = consoles.find((c) => c.id === value.consoleId);
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        <div className="flex gap-1">
+          <Button
+            type="button"
+            size="sm"
+            variant={value.kind === "console" ? "default" : "outline"}
+            onClick={() => onChange({ ...value, kind: "console" })}
+          >
+            Console
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={value.kind === "custom" ? "default" : "outline"}
+            onClick={() => onChange({ ...value, kind: "custom" })}
+          >
+            Custom
+          </Button>
+        </div>
+      </div>
+
+      {value.kind === "console" ? (
+        <>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">Console</label>
+            <select
+              className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+              value={value.consoleId}
+              onChange={(e) => {
+                const console_ = consoles.find((c) => c.id === e.target.value);
+                onChange({
+                  ...value,
+                  consoleId: e.target.value,
+                  // Prefill from the console's default, but only if the
+                  // operator hasn't already typed something of their own
+                  // — lets fired/resolved use different webhook IDs on
+                  // the same console (SPEC.md section 7).
+                  webhookId: value.webhookId || console_?.defaultWebhookId || "",
+                });
+              }}
+              required
+            >
+              <option value="" disabled>
+                Select a console
+              </option>
+              {consoles.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">Webhook ID</label>
+            <Input
+              value={value.webhookId}
+              onChange={(e) => onChange({ ...value, webhookId: e.target.value })}
+              placeholder="matches an Alarm Manager rule's webhook trigger"
+              required
+            />
+          </div>
+          {selectedConsole && value.webhookId && (
+            <p className="break-all font-mono text-xs text-muted-foreground">
+              {buildConsoleWebhookUrl(selectedConsole.host, value.webhookId)}
+            </p>
+          )}
+        </>
+      ) : (
+        <>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">URL</label>
+            <Input
+              value={value.url}
+              onChange={(e) => onChange({ ...value, url: e.target.value })}
+              placeholder="https://..."
+              required
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">Bearer token (optional)</label>
+            <Input
+              type="password"
+              value={value.bearerToken}
+              onChange={(e) => onChange({ ...value, bearerToken: e.target.value })}
+              placeholder={editing ? "leave blank to keep the existing token" : "sent as Authorization: Bearer …"}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 export default function RulesPage() {
@@ -220,9 +381,9 @@ export default function RulesPage() {
       sensorId: rule.sensorId,
       metric: rule.metric,
       durationSeconds: rule.durationSeconds,
-      webhookUrl: rule.webhook.url,
-      webhookMethod: rule.webhook.method,
-      resolvedWebhookUrl: rule.resolvedWebhook?.url ?? "",
+      webhook: webhookFormValueFromTarget(rule.webhook),
+      resolvedWebhookEnabled: rule.resolvedWebhook != null,
+      resolvedWebhook: webhookFormValueFromTarget(rule.resolvedWebhook),
       enabled: rule.enabled,
       ...conditionToFormFields(displayCondition),
     });
@@ -248,15 +409,24 @@ export default function RulesPage() {
         throw new Error("selected duration is too short for this sensor's reporting interval");
       }
 
+      const webhook = buildWebhookTarget(form.webhook);
+      const webhookCheck = validateWebhookTarget(webhook);
+      if (!webhookCheck.valid) throw new Error(webhookCheck.error);
+
+      let resolvedWebhook: WebhookTarget | undefined;
+      if (form.resolvedWebhookEnabled) {
+        resolvedWebhook = buildWebhookTarget(form.resolvedWebhook);
+        const resolvedCheck = validateWebhookTarget(resolvedWebhook);
+        if (!resolvedCheck.valid) throw new Error(resolvedCheck.error);
+      }
+
       const payload = {
         sensorId: form.sensorId,
         metric: form.metric as Sensor["metrics"][number],
         condition,
         durationSeconds,
-        webhook: { url: form.webhookUrl, method: form.webhookMethod },
-        resolvedWebhook: form.resolvedWebhookUrl
-          ? { url: form.resolvedWebhookUrl, method: form.webhookMethod }
-          : undefined,
+        webhook,
+        resolvedWebhook,
         enabled: form.enabled,
       };
 
@@ -548,24 +718,34 @@ export default function RulesPage() {
               )}
             </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Webhook URL (fired)</label>
-              <Input
-                value={form.webhookUrl}
-                onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
-                placeholder="https://..."
-                required
-              />
-            </div>
+            <WebhookFieldsEditor
+              label="Webhook (fired)"
+              value={form.webhook}
+              onChange={(webhook) => setForm({ ...form, webhook })}
+              consoles={consoles}
+              editing={editingId != null}
+            />
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Webhook URL (resolved, optional)</label>
-              <Input
-                value={form.resolvedWebhookUrl}
-                onChange={(e) => setForm({ ...form, resolvedWebhookUrl: e.target.value })}
-                placeholder="https://..."
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="resolvedWebhookEnabled"
+                checked={form.resolvedWebhookEnabled}
+                onChange={(e) => setForm({ ...form, resolvedWebhookEnabled: e.target.checked })}
               />
+              <label htmlFor="resolvedWebhookEnabled" className="text-xs text-muted-foreground">
+                Also send a webhook when the alarm resolves
+              </label>
             </div>
+            {form.resolvedWebhookEnabled && (
+              <WebhookFieldsEditor
+                label="Webhook (resolved)"
+                value={form.resolvedWebhook}
+                onChange={(resolvedWebhook) => setForm({ ...form, resolvedWebhook })}
+                consoles={consoles}
+                editing={editingId != null}
+              />
+            )}
 
             {error && <p className="text-sm text-red-600">{error}</p>}
 
@@ -679,12 +859,16 @@ export default function RulesPage() {
                     </TableCell>
                   )}
                   <TableCell>
-                    <span
-                      className="block max-w-[220px] truncate font-mono text-xs text-muted-foreground"
-                      title={rule.webhook.url}
-                    >
-                      {rule.webhook.url}
-                    </span>
+                    {rule.webhook.kind === "console" ? (
+                      <span className="text-xs text-muted-foreground">{consoleWebhookLabel(rule.webhook, consoles)}</span>
+                    ) : (
+                      <span
+                        className="block max-w-[220px] truncate font-mono text-xs text-muted-foreground"
+                        title={rule.webhook.url}
+                      >
+                        {rule.webhook.url}
+                      </span>
+                    )}
                   </TableCell>
                   {canEdit && (
                     <TableCell>

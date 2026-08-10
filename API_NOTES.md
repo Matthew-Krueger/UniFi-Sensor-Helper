@@ -121,11 +121,22 @@ this session could observe, for sensor value changes.)*
 
 ### `POST /v1/alarm-manager/webhook/{id}`
 
-- **Method**: POST. **Auth**: `X-API-KEY` header (consistent with every
+- **Method**: POST. **Auth**: `X-API-Key` header (consistent with every
   other endpoint on this API — no unauthenticated path was found).
-  **Confidence**: inferred from OpenAPI spec + SPEC.md's worked example;
-  not yet fired live (requires a configured Alarm Manager rule on the
-  console first — see SPEC.md section 7, a manual one-time step per site).
+  **Confidence**: request shape (method, header name, path) confirmed
+  against UniFi's own published documentation:
+  ```
+  curl -L -g -X POST "https://{host}/proxy/protect/integration/v1/alarm-manager/webhook/{id}" \
+    -H "Accept: application/json" \
+    -H "X-API-Key: <X-API-Key>"
+  ```
+  Still not fired live against a real console in this session (requires a
+  configured Alarm Manager rule first — see SPEC.md section 7, a manual
+  one-time step per site) — implemented in
+  `packages/engine/src/resolveWebhookTarget.ts` per this documented
+  shape, including an `Accept: application/json` header. Uses the same
+  self-signed-cert tolerance (`insecureTls`) as every other call to a
+  console, since this hits the console directly.
 - **Path param `id`**: user-defined string; the Alarm Manager rule must be
   configured with the same ID to be triggered by this call.
 - **Response**: `204` on success, `400` (`idRequiredError`) if `id` is

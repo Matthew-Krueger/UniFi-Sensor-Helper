@@ -309,14 +309,27 @@ Tables (see `packages/engine/src/db.ts` for the authoritative schema):
 - `sensors` — `id` (Protect device id), `name`, `discovered_metrics` (JSON
   array).
 - `latches` — one row per (sensor, metric) latch: `sensor_id`, `metric`,
-  `direction`, `arm_threshold`, `clear_threshold`, `duration_seconds`,
-  `webhook_json`, `resolved_webhook_json`, `enabled`. Mirrors the `Latch`
-  domain type in section 4.
+  `condition_json` (see section 4's `RuleCondition`), `duration_seconds`,
+  `webhook_json`, `resolved_webhook_json`, `enabled`. `webhook_json`
+  stores a `WebhookTarget` — either `{kind:"console", consoleId,
+  webhookId}` (delivers to a Protect console's own Alarm Manager webhook
+  — see section 7) or `{kind:"custom", url, method, bearerToken?}` (an
+  arbitrary external URL). Resolved to a concrete request only at
+  dispatch time (`packages/engine/src/resolveWebhookTarget.ts`), so a
+  console's host/API key changing doesn't require touching every rule
+  that targets it.
+- `webhook_deliveries` — last 10 delivery attempts per rule (pruned on
+  insert): `latch_id`, `kind` (fired/resolved/test), the resolved `url`,
+  `ok`, `status`, `error`, a capped `response_body_snippet`,
+  `dispatched_at`. Feeds the Rules page's "last used" + history inspector.
 - `latch_state` — one row per latch: `state` (idle/armed/fired),
   `armed_at`, `fired_at`, `updated_at`. This is the restart-survival
   mechanism referenced in section 11 — no separate JSON snapshot file.
 - `users` — operator accounts (see section 3): `username`,
   `password_hash` (argon2id), `created_at`.
+- `protect_consoles` — `name`, `host`, `api_key`,
+  `default_interval_seconds`, `default_webhook_id` (prefills a rule's
+  webhook-id field when it targets this console — see section 7).
 
 Webhook URLs are shown in full to `admin`/`superadmin` and masked only
 for the read-only `user` role — see CLAUDE.md's "Secret obfuscation"
@@ -329,17 +342,35 @@ admin-only visibility.
 
 ## 7. Protect-side setup (manual, one-time, per resolved latch)
 
+The primary, intended delivery path is a rule's webhook targeting the
+Protect console itself ("console" kind — see section 6), not an external
+URL. Confirmed against the live API: `POST /proxy/protect/integration/
+v1/alarm-manager/webhook/{id}`, header `X-API-Key: {console's API key}`,
+204 on success — the console runs a self-signed cert by default, so
+dispatch to a "console" target tolerates that the same way every other
+call to that console does (`packages/engine/src/protect.ts`'s
+`insecureTls`, applied via `resolveWebhookTarget.ts`).
+
 For each latch that should actually notify:
 
 1. One Alarm Manager rule in Protect: trigger type = Webhook, action =
-   Notify. This is the `webhook.url` target for the "fired" event.
-2. If using `resolvedWebhook`, a second rule of the same shape for the
-   resolved event.
+   Notify. The webhook ID configured on that rule is what the Rules
+   page's "Webhook ID" field must match for the "fired" event — a
+   console's `default_webhook_id` (Consoles page) prefills this but each
+   rule can override it.
+2. If using `resolvedWebhook`, a second rule of the same shape (a
+   different webhook ID) for the resolved event.
 
 Nothing else in Protect's Alarm Manager should reference these sensors —
 no separate raw-threshold rules, no Notify actions anywhere else for them.
 The latch engine is the only thing deciding when to fire; Protect is only
 the delivery mechanism for the final push.
+
+A rule's webhook can alternatively be "custom" kind — an arbitrary
+external URL with an optional bearer token — for sites that want to
+bypass Protect's own Alarm Manager and call something else directly (a
+generic webhook receiver, a different notification service). No other
+auth/header customization is supported for that path currently (YAGNI).
 
 ## 8. API discovery (required, ongoing)
 
