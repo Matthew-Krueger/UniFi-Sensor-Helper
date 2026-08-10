@@ -21,3 +21,7 @@ next-env.d.ts
 
 .DS_Store
 *.log
+
+# Reference material dropped in for debugging (large vendor API dumps) —
+# not project source, not meant to be tracked.
+/Unifi API Specs/

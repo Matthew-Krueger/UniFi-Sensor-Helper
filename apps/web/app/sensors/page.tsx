@@ -4,7 +4,7 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { ProtectConsole, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
+import type { ConsoleStatus, ProtectConsole, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
 import { DURATION_PRESETS, effectiveInterval } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
@@ -13,6 +13,15 @@ import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
 // Discovery-driven — SPEC.md section 12: sensors are never hand-typed, only
 // ever listed from what /api/sensors/discover found on a configured
 // console. If no console is configured yet, this page points to Consoles.
+//
+// Grouped by console, one card per console containing its sensors —
+// reporting status ("last contacted"/"reporting every"/good-delayed-
+// overdue) is shown once per console, not once per sensor, because
+// that's genuinely what it is: sensors are always fetched in one bulk
+// GET /v1/sensors call per console, so every sensor on a console shares
+// the exact same "when did we last hear anything" and "how often does
+// that happen" answer. Showing it per-sensor was redundant and implied a
+// per-sensor cadence that was never real.
 const POLL_MS = 5000;
 const INTERVAL_PRESETS = DURATION_PRESETS;
 
@@ -24,11 +33,8 @@ function formatInterval(seconds: number): string {
   return `${Math.round(seconds / 3600)}h`;
 }
 
-// Color reflects staleness *relative to the owning console's effective
-// interval* (observed > console-default — see interval.ts). Sensors are
-// always fetched in one bulk call per console, so "expected cadence" is
-// inherently a console-level thing, not per-sensor; the badge follows
-// the console it's on, not a per-sensor setting. useNowTick (called in
+// Color reflects staleness relative to the console's effective interval
+// (observed > console-default — see interval.ts). useNowTick (called in
 // the page component) re-renders this every second regardless of the 5s
 // data-poll cadence, specifically so a client that hasn't checked in for
 // a few seconds can never be the reason something looks stale — elapsed
@@ -38,15 +44,14 @@ const GOOD_MULTIPLIER = 1.5; // within/close to the expected window
 const WARN_MULTIPLIER = 3; // "delayed" — user's explicit 3x threshold
 
 function reportingBadge(
-  sensor: Sensor,
-  status: SensorStatus | undefined,
+  lastEventAt: number | null,
+  observedSeconds: number | null,
   defaultIntervalSeconds: number
 ): { variant: "idle" | "good" | "armed" | "fired"; label: string } {
-  if (!status?.lastSeenAt) return { variant: "idle", label: "no data yet" };
+  if (!lastEventAt) return { variant: "idle", label: "no data yet" };
 
-  const metricIntervals = sensor.metrics.map((m) => effectiveInterval(status.observedIntervalSeconds[m], defaultIntervalSeconds).seconds);
-  const expectedSeconds = metricIntervals.length > 0 ? Math.min(...metricIntervals) : defaultIntervalSeconds;
-  const elapsedSeconds = (Date.now() - status.lastSeenAt) / 1000;
+  const expectedSeconds = effectiveInterval(observedSeconds, defaultIntervalSeconds).seconds;
+  const elapsedSeconds = (Date.now() - lastEventAt) / 1000;
 
   if (elapsedSeconds <= expectedSeconds * GOOD_MULTIPLIER) return { variant: "good", label: "reporting" };
   if (elapsedSeconds <= expectedSeconds * WARN_MULTIPLIER) return { variant: "armed", label: "delayed" };
@@ -75,6 +80,7 @@ export default function SensorsPage() {
   const [sensors, setSensors] = React.useState<Sensor[]>([]);
   const [statuses, setStatuses] = React.useState<SensorStatus[]>([]);
   const [consoles, setConsoles] = React.useState<ProtectConsole[]>([]);
+  const [consoleStatuses, setConsoleStatuses] = React.useState<ConsoleStatus[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = React.useState<number | null>(null);
@@ -86,7 +92,11 @@ export default function SensorsPage() {
       setSensors(body.sensors);
       setStatuses(body.statuses);
     }
-    if (consolesRes.ok) setConsoles((await consolesRes.json()).consoles);
+    if (consolesRes.ok) {
+      const body = await consolesRes.json();
+      setConsoles(body.consoles);
+      setConsoleStatuses(body.statuses);
+    }
   }, []);
 
   // See usePausedWhileSelectFocused's doc comment — avoids a real Firefox
@@ -180,47 +190,63 @@ export default function SensorsPage() {
           <CardContent />
         </Card>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {sensors.map((sensor) => {
-            const status = statuses.find((s) => s.sensorId === sensor.id);
-            const console_ = consoles.find((c) => c.id === sensor.consoleId);
-            const badge = reportingBadge(sensor, status, console_?.defaultIntervalSeconds ?? 300);
+        <div className="flex flex-col gap-6">
+          {consoles.map((console_) => {
+            const consoleSensors = sensors.filter((s) => s.consoleId === console_.id);
+            if (consoleSensors.length === 0) return null;
+
+            const status = consoleStatuses.find((s) => s.consoleId === console_.id);
+
+            // Aggregate observed interval across this console's sensors —
+            // they all update together in one bulk fetch, so per-sensor
+            // observed values are redundant copies of the same signal;
+            // the minimum is the most conservative (fastest-expected)
+            // read for the staleness check below.
+            const observedValues = consoleSensors.flatMap((s) => {
+              const st = statuses.find((x) => x.sensorId === s.id);
+              return st ? Object.values(st.observedIntervalSeconds).filter((v): v is number => v != null) : [];
+            });
+            const observedSeconds = observedValues.length > 0 ? Math.min(...observedValues) : null;
+            const badge = reportingBadge(status?.lastEventAt ?? null, observedSeconds, console_.defaultIntervalSeconds);
+
             return (
-              <Card key={sensor.id}>
+              <Card key={console_.id}>
                 <CardHeader>
                   <div className="flex items-center justify-between gap-2">
-                    <CardTitle className="text-base">{sensor.name}</CardTitle>
+                    <CardTitle>{console_.name}</CardTitle>
                     <Badge variant={badge.variant}>{badge.label}</Badge>
                   </div>
-                  <CardDescription title={status?.lastSeenAt ? absoluteTimeLabel(status.lastSeenAt) : undefined}>
-                    Last contacted: {preciseAgoLabel(status?.lastSeenAt ?? null)}
+                  <CardDescription title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined}>
+                    Last contacted: {preciseAgoLabel(status?.lastEventAt ?? null)}
+                    {observedSeconds != null && ` · reporting every ~${formatInterval(observedSeconds)}`}
                   </CardDescription>
-                  <p className="text-xs text-muted-foreground">Console: {console_?.name ?? "unknown"}</p>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-2">
-                  {sensor.metrics.length === 0 ? (
-                    <span className="text-sm text-muted-foreground">No metrics enabled on this device</span>
-                  ) : (
-                    <div className="flex flex-col gap-1">
-                      {sensor.metrics.map((m) => {
-                        const value = status?.values[m];
-                        const observed = status?.observedIntervalSeconds[m];
-                        return (
-                          <div key={m} className="flex flex-wrap items-center gap-1">
-                            <Badge variant="outline">
-                              {m}
-                              {value != null ? `: ${formatValue(m, value)}` : ""}
-                            </Badge>
-                            {observed != null && (
-                              <span className="text-xs text-muted-foreground">
-                                reporting every ~{formatInterval(observed)}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                <CardContent>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {consoleSensors.map((sensor) => {
+                      const sensorStatus = statuses.find((s) => s.sensorId === sensor.id);
+                      return (
+                        <div key={sensor.id} className="rounded-md border border-border p-3">
+                          <p className="mb-2 text-sm font-medium">{sensor.name}</p>
+                          {sensor.metrics.length === 0 ? (
+                            <span className="text-xs text-muted-foreground">No metrics enabled</span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {sensor.metrics.map((m) => {
+                                const value = sensorStatus?.values[m];
+                                return (
+                                  <Badge key={m} variant="outline">
+                                    {m}
+                                    {value != null ? `: ${formatValue(m, value)}` : ""}
+                                  </Badge>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </CardContent>
               </Card>
             );
