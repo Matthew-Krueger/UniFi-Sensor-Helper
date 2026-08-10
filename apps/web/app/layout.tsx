@@ -16,7 +16,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           <PasswordResetGate />
           <Nav />
-          <main className="mx-auto max-w-5xl px-6 py-8">{children}</main>
+          {/* md:pl-72 reserves space for the drawer, which defaults open
+              as a persistent sidebar at that breakpoint — see nav-drawer.tsx.
+              mx-auto/max-w-5xl live on the inner div so content is still
+              centered *within* the remaining space, not the full viewport. */}
+          <main className="md:pl-72">
+            <div className="mx-auto max-w-5xl px-6 py-8">{children}</div>
+          </main>
         </ThemeProvider>
       </body>
     </html>

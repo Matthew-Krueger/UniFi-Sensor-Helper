@@ -20,13 +20,28 @@ interface NavDrawerProps {
   role: string | null;
 }
 
+const DESKTOP_QUERY = "(min-width: 768px)"; // matches Tailwind's md: breakpoint
+
 // Drawer-based nav (matches Unifi's own app navigation pattern, per
 // project preference over a horizontal tab bar) — the hamburger trigger
 // and slide-in drawer are the nav on every screen size, not just a mobile
-// fallback, so there's one nav pattern to maintain instead of two.
+// fallback, so there's one nav pattern to maintain instead of two. On
+// desktop it defaults open and behaves like a persistent sidebar (no
+// dimming overlay, doesn't close on an outside click — see sheet.tsx);
+// the hamburger can still collapse it manually if wanted.
 export function NavDrawer({ links, username, role }: NavDrawerProps) {
   const [open, setOpen] = React.useState(false);
+  const [isDesktop, setIsDesktop] = React.useState(false);
   const pathname = usePathname();
+
+  React.useEffect(() => {
+    const mql = window.matchMedia(DESKTOP_QUERY);
+    setIsDesktop(mql.matches);
+    setOpen(mql.matches);
+    const onChange = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background">
@@ -39,7 +54,14 @@ export function NavDrawer({ links, username, role }: NavDrawerProps) {
                 <span className="sr-only">Open navigation</span>
               </Button>
             </SheetTrigger>
-            <SheetContent>
+            <SheetContent
+              onInteractOutside={(e) => {
+                if (isDesktop) e.preventDefault();
+              }}
+              onEscapeKeyDown={(e) => {
+                if (isDesktop) e.preventDefault();
+              }}
+            >
               <SheetTitle>UnifiSensorLatch</SheetTitle>
               <nav className="flex flex-col gap-1">
                 {links.map((link) => {

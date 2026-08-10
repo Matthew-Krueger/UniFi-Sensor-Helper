@@ -23,7 +23,10 @@ const SheetOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      // No dimming/blocking overlay at md+ — there the drawer behaves as a
+      // persistent sidebar rather than a modal (see NavDrawer), so nothing
+      // should darken or intercept clicks on the rest of the page.
+      "fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 md:hidden",
       className
     )}
     {...props}
