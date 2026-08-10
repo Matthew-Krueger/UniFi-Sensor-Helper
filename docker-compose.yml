@@ -12,8 +12,6 @@ services:
       - DATABASE_PATH=/repo/data/app.db
       - TLS_CERT_PATH=/repo/certs/cert.pem
       - TLS_KEY_PATH=/repo/certs/key.pem
-      - PROTECT_HOST=${PROTECT_HOST}
-      - PROTECT_API_KEY=${PROTECT_API_KEY}
     volumes:
       - ./data:/repo/data
       - ./certs:/repo/certs:ro

@@ -4,8 +4,23 @@ export type Metric = "lux" | "temperature" | "humidity" | "leak";
 
 export interface Sensor {
   id: string; // Protect device id
+  consoleId: string; // which ProtectConsole this sensor was discovered on
   name: string; // friendly name, editable in UI
   metrics: Metric[]; // discovered from the API
+}
+
+// A UniFi Protect console this deployment talks to. Stored in SQLite, not
+// .env — unlike a single fixed operator credential, this is genuinely
+// user-editable (a site can add/remove/repoint consoles through the UI,
+// e.g. standing up a second deployment per SPEC.md section 12). apiKey is
+// secret-bearing: mask it everywhere per CLAUDE.md's obfuscation rule,
+// same as webhook URLs.
+export interface ProtectConsole {
+  id: string;
+  name: string; // friendly label, e.g. "Main site NVR"
+  host: string; // LAN IP or hostname
+  apiKey: string;
+  createdAt: number;
 }
 
 export type Direction = "above" | "below";

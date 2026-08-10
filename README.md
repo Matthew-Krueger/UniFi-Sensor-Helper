@@ -6,9 +6,10 @@ crossed; this service adds "stay over threshold for N minutes before I
 care," with independent arm/clear thresholds per (sensor, metric) pair. See
 `SPEC.md` for the full design.
 
-**Status**: structural skeleton. The latch state machine, storage, and auth
-are implemented and tested; live UniFi Protect API integration is not yet
-built (see `API_NOTES.md`).
+**Status**: functional. The latch state machine, storage, auth, and the
+UniFi Protect integration (sensor discovery, realtime websocket ingest,
+webhook dispatch) are implemented and tested — see `API_NOTES.md` for the
+endpoints in use and how each was confirmed against a live console.
 
 ## Prerequisites
 
@@ -51,11 +52,21 @@ built (see `API_NOTES.md`).
 5. Log in with the `ADMIN_USERNAME`/`ADMIN_PASSWORD` you set in `.env`.
    This account is seeded into the database on first boot only; manage
    further accounts from the Users area once built out.
+6. On the **Settings** page, add your Protect console: a friendly name,
+   its LAN host/IP, and a local API key generated at unifi.ui.com. The
+   engine connects immediately — no restart needed — and the API key is
+   stored in SQLite (masked in the UI), not `.env`, since a site can add
+   more than one console.
+7. On the **Sensors** page, click **Refresh** to discover sensors from the
+   console(s) you just added. Sensors are always discovery-driven; none are
+   ever hardcoded.
+8. On the **Latches** page, create a latch against a discovered sensor's
+   metric: arm/clear thresholds, how long it must stay armed before firing,
+   and the webhook to call. See `SPEC.md` section 4 for worked examples.
 
-On first run, with no sensors or latches configured yet, the Dashboard,
-Sensors, and Latches pages show an empty state rather than erroring — this
-is expected until a Protect console is connected and sensors are
-discovered.
+On first run, with no consoles, sensors, or latches configured yet, the
+Dashboard, Sensors, and Latches pages show an empty state rather than
+erroring.
 
 ## Running tests
 
@@ -63,8 +74,9 @@ discovered.
 bun test
 ```
 
-Covers the latch state machine's arm/clear/fire/resolve transitions and the
-SQLite persistence layer (`packages/engine/test/`).
+Covers the latch state machine's arm/clear/fire/resolve transitions, the
+restart-mid-armed-state persistence case, and the webhook dispatcher's
+retry/masking behavior (`packages/engine/test/`).
 
 ## Deploying
 
@@ -74,18 +86,25 @@ See `DEPLOY.md` for the Docker + systemd production setup on Debian 13.
 
 ```
 apps/web/          Next.js app — UI, Route Handlers, custom server entrypoint
-packages/engine/    Latch state machine, SQLite storage, auth — no framework dependency
+packages/engine/    Latch state machine, Protect API client, SQLite storage (Drizzle), auth — no framework dependency
 packages/shared/    Domain types and the shared secret-masking helper
+scripts/            One-off manual API discovery scripts (not part of the app) — see API_NOTES.md
 ```
 
 ## Configuration
 
-Sensors, latches, and latch state live in a local SQLite database
-(`data/app.db`, path set via `DATABASE_PATH`), not in a config file —
-gitignored, created automatically on first boot. Nothing here is meant to
-be hand-edited directly; use the UI or the `/api/*` Route Handlers.
-Secrets (admin credentials, session signing key, Protect API key) live in
-`.env` only.
+Sensors, latches, latch state, and Protect console connections (host +
+API key) live in a local SQLite database (`data/app.db`, path set via
+`DATABASE_PATH`), not in a config file — gitignored, created automatically
+on first boot, schema managed by Drizzle (`packages/engine/src/schema.ts`,
+migrations in `packages/engine/drizzle/`). Nothing here is meant to be
+hand-edited directly; use the UI or the `/api/*` Route Handlers. A Protect
+console's API key is stored there too (not `.env`) because, unlike the
+admin login, it's meant to be user-editable — a site can connect more than
+one console — but it's still masked everywhere it's read back (config
+list, logs), same as webhook URLs. `.env` is reserved for the admin
+bootstrap credentials, the session-signing secret, and TLS cert paths —
+values with no reason to be edited through the UI.
 
 ## License
 

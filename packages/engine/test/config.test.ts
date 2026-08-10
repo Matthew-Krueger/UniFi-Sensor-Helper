@@ -1,16 +1,13 @@
-import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { ConfigStore } from "../src/config";
-import { resetDbForTests } from "../src/db";
+import { createTestDb } from "../src/db";
 
 // Covers CLAUDE.md's fifth required case: a restart mid-armed-state behaves
 // sanely. The state machine is pure (see stateMachine.test.ts); persistence
 // is this module's job, so the round-trip through ConfigStore is what proves
 // "restart doesn't lose an in-progress arm."
 function freshStore(): ConfigStore {
-  const db = new Database(":memory:");
-  resetDbForTests(db);
-  return new ConfigStore(db);
+  return new ConfigStore(createTestDb());
 }
 
 describe("ConfigStore latch state persistence", () => {
@@ -37,7 +34,7 @@ describe("ConfigStore latch state persistence", () => {
   test("latches and sensors round-trip through upsert", () => {
     const store = freshStore();
 
-    store.upsertSensor({ id: "sensor-1", name: "Walk-in Freezer", metrics: ["temperature"] });
+    store.upsertSensor({ id: "sensor-1", consoleId: "console-1", name: "Walk-in Freezer", metrics: ["temperature"] });
     store.upsertLatch({
       id: "freezer-temp",
       sensorId: "sensor-1",

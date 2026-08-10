@@ -1,6 +1,8 @@
-import type { Reading } from "@unifi-sensor-latch/shared";
+import type { ProtectConsole, Reading } from "@unifi-sensor-latch/shared";
 import { AuthStore } from "./auth";
 import { ConfigStore } from "./config";
+import { checkConnection, fetchRawSensors, rawSensorToSensor, subscribeDevices, type DeviceSubscription } from "./protect";
+import { dispatchWebhook } from "./webhookDispatcher";
 import { applyReading, initialState } from "./stateMachine";
 
 // The latch engine singleton. Boots once in apps/web/server.ts before the
@@ -12,16 +14,61 @@ export class LatchEngine {
   readonly config = new ConfigStore();
   readonly auth = new AuthStore();
 
+  private subscriptions = new Map<string, DeviceSubscription>();
+
   async boot(): Promise<void> {
     await this.auth.seedFromEnvIfEmpty();
+
+    for (const console_ of this.config.listProtectConsoles()) {
+      await this.connectConsole(console_);
+    }
+
     console.log("[engine] booted");
   }
 
-  // Ingest entrypoint. TODO(section 8): wire this to real Protect readings
-  // (websocket subscribe or poll) once API discovery lands. Webhook dispatch
-  // on "fired"/"resolved" transitions is also TODO — stubbed as a console
-  // log for now so the state machine's correctness can be exercised without
-  // a live Protect console.
+  // Connects to one Protect console: does an initial sensor discovery pass
+  // (so newly-added sensors show up without waiting for a websocket delta
+  // that mentions them) and opens the realtime subscription. Called both on
+  // boot (for every already-configured console) and whenever a console is
+  // added through the UI, so a new console goes live without a restart.
+  async connectConsole(consoleConfig: ProtectConsole): Promise<void> {
+    this.disconnectConsole(consoleConfig.id);
+
+    try {
+      await checkConnection(consoleConfig);
+    } catch (err) {
+      console.error(`[engine] console "${consoleConfig.name}" unreachable, not subscribing:`, err);
+      return;
+    }
+
+    await this.discoverSensors(consoleConfig);
+
+    const subscription = subscribeDevices(
+      consoleConfig,
+      (reading) => this.ingest(reading),
+      (status) => console.log(`[engine] console "${consoleConfig.name}" websocket ${status}`)
+    );
+    this.subscriptions.set(consoleConfig.id, subscription);
+  }
+
+  disconnectConsole(consoleId: string): void {
+    this.subscriptions.get(consoleId)?.close();
+    this.subscriptions.delete(consoleId);
+  }
+
+  // Discovery-driven sensor list (SPEC.md section 12) — never hand-typed.
+  async discoverSensors(consoleConfig: ProtectConsole): Promise<void> {
+    const raw = await fetchRawSensors(consoleConfig);
+    for (const r of raw) {
+      const sensor = rawSensorToSensor(r);
+      this.config.upsertSensor({ ...sensor, consoleId: consoleConfig.id });
+    }
+  }
+
+  // Ingest entrypoint — called for every reading, whether from a live
+  // websocket push or (in tests) directly. Applies the reading to every
+  // enabled latch watching that (sensorId, metric) pair and dispatches the
+  // configured webhook on a fired/resolved transition.
   ingest(reading: Reading): void {
     const latches = this.config.listLatches().filter((l) => l.sensorId === reading.sensorId && l.enabled);
 
@@ -32,10 +79,13 @@ export class LatchEngine {
       const { next, transition } = applyReading(latch, current, reading);
       this.config.saveLatchState(next);
 
+      const sensor = this.config.listSensors().find((s) => s.id === reading.sensorId);
+      const sensorName = sensor?.name ?? reading.sensorId;
+
       if (transition.type === "fired") {
-        console.log(`[engine] TODO dispatch webhook: latch ${latch.id} fired`);
-      } else if (transition.type === "resolved") {
-        console.log(`[engine] TODO dispatch resolvedWebhook: latch ${latch.id} resolved`);
+        void dispatchWebhook(latch.webhook, { latch, sensorName, value: reading.value });
+      } else if (transition.type === "resolved" && latch.resolvedWebhook) {
+        void dispatchWebhook(latch.resolvedWebhook, { latch, sensorName, value: reading.value });
       }
     }
   }

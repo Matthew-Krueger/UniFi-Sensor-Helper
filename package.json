@@ -13,9 +13,12 @@
     "dev": "bun --filter web dev",
     "build": "bun --filter web build",
     "start": "bun --filter web start",
-    "test": "bun test"
+    "test": "bun test",
+    "db:generate": "drizzle-kit generate --config packages/engine/drizzle.config.ts",
+    "db:migrate": "bun run packages/engine/src/migrate.ts"
   },
   "devDependencies": {
+    "drizzle-kit": "^0.31.10",
     "typescript": "^5.7.0"
   }
 }

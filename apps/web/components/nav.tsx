@@ -5,6 +5,7 @@ const links = [
   { href: "/", label: "Dashboard" },
   { href: "/sensors", label: "Sensors" },
   { href: "/latches", label: "Latches" },
+  { href: "/settings", label: "Settings" },
 ];
 
 export function Nav() {

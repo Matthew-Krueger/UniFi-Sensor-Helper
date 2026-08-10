@@ -1,65 +1,55 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
+import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import * as schema from "./schema";
 
 // One gitignored SQLite file for everything the engine owns: sensors,
-// latches, latch state, and user accounts. Replaces the config.json +
-// flat JSON state snapshot originally described in SPEC.md section 6.
+// latches, latch state, user accounts, and Protect console connections.
+// Drizzle owns the schema (see schema.ts) and migrations (see
+// drizzle/ — generated via `bun run db:generate`, applied here on boot).
 const DEFAULT_DB_PATH = "./data/app.db";
 
-let db: Database | null = null;
+// import.meta.dir (Bun-specific) breaks once Next.js's webpack bundles this
+// module for a Route Handler — the bundle's on-disk location isn't this
+// source file's, so a path relative to it resolves to nowhere. Resolve
+// relative to process.cwd() instead, trying both real run contexts: `bun
+// test` / `db:migrate` (cwd = repo root) and the Next app, dev or compiled,
+// which Next always runs with cwd = apps/web (see DEPLOY.md).
+function resolveMigrationsFolder(): string {
+  if (process.env.MIGRATIONS_FOLDER) return process.env.MIGRATIONS_FOLDER;
+  const candidates = [
+    join(process.cwd(), "packages", "engine", "drizzle"), // cwd = repo root
+    join(process.cwd(), "..", "..", "packages", "engine", "drizzle"), // cwd = apps/web
+    join(process.cwd(), "drizzle"), // cwd = packages/engine
+  ];
+  return candidates.find(existsSync) ?? candidates[0]!;
+}
 
-export function getDb(): Database {
+const MIGRATIONS_FOLDER = resolveMigrationsFolder();
+
+let db: BunSQLiteDatabase<typeof schema> | null = null;
+
+export function getDb(): BunSQLiteDatabase<typeof schema> {
   if (db) return db;
 
   const path = process.env.DATABASE_PATH ?? DEFAULT_DB_PATH;
   mkdirSync(dirname(path), { recursive: true });
 
-  db = new Database(path, { create: true });
-  db.exec("PRAGMA journal_mode = WAL;");
-  migrate(db);
+  const sqlite = new Database(path, { create: true });
+  sqlite.exec("PRAGMA journal_mode = WAL;");
+
+  db = drizzle(sqlite, { schema });
+  migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   return db;
 }
 
-function migrate(database: Database): void {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS sensors (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      discovered_metrics TEXT NOT NULL DEFAULT '[]'
-    );
-
-    CREATE TABLE IF NOT EXISTS latches (
-      id TEXT PRIMARY KEY,
-      sensor_id TEXT NOT NULL,
-      metric TEXT NOT NULL,
-      direction TEXT NOT NULL,
-      arm_threshold REAL NOT NULL,
-      clear_threshold REAL NOT NULL,
-      duration_seconds INTEGER NOT NULL,
-      webhook_json TEXT NOT NULL,
-      resolved_webhook_json TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS latch_state (
-      latch_id TEXT PRIMARY KEY,
-      state TEXT NOT NULL DEFAULT 'idle',
-      armed_at INTEGER,
-      fired_at INTEGER,
-      updated_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      username TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-  `);
-}
-
-// Test-only escape hatch so each test file can start from a clean in-memory db.
-export function resetDbForTests(database: Database): void {
-  migrate(database);
+// Test-only escape hatch so each test file can start from a clean in-memory
+// db with the schema applied, without going through migration files.
+export function createTestDb(): BunSQLiteDatabase<typeof schema> {
+  const sqlite = new Database(":memory:");
+  const testDb = drizzle(sqlite, { schema });
+  migrate(testDb, { migrationsFolder: MIGRATIONS_FOLDER });
+  return testDb;
 }
