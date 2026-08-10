@@ -15,8 +15,9 @@ export interface Sensor {
 // .env — unlike a single fixed operator credential, this is genuinely
 // user-editable (a site can add/remove/repoint consoles through the UI,
 // e.g. standing up a second deployment per SPEC.md section 12). apiKey is
-// secret-bearing: mask it everywhere per CLAUDE.md's obfuscation rule,
-// same as webhook URLs.
+// a real credential (unlike a webhook URL, which is only masked from the
+// read-only "user" role — see CLAUDE.md's obfuscation rule): mask it
+// everywhere it's read back, for every role.
 export interface ProtectConsole {
   id: string;
   name: string; // friendly label, e.g. "Main site NVR"
@@ -45,6 +46,25 @@ export interface Latch {
   webhook: WebhookTarget;
   resolvedWebhook?: WebhookTarget;
   enabled: boolean;
+}
+
+// A single webhook delivery attempt, recorded for the Rules page's "last
+// used" / "inspect the response" UI (only admin/superadmin can view these
+// — see CLAUDE.md's webhook-URL visibility rule). "test" is a manually
+// triggered send (Rules page's Test button), not a real alarm — kept
+// distinct so it's never confused with an actual fire/resolve event.
+export interface WebhookDelivery {
+  id: string;
+  latchId: string;
+  kind: "fired" | "resolved" | "test";
+  url: string;
+  method: "GET" | "POST";
+  ok: boolean;
+  status: number | null;
+  error: string | null;
+  responseBodySnippet: string | null; // capped length — see webhookDispatcher.ts
+  attempts: number;
+  dispatchedAt: number;
 }
 
 export type LatchState = "idle" | "armed" | "fired";

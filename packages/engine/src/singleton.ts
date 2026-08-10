@@ -1,4 +1,13 @@
-import type { ConsoleStatus, EffectiveInterval, Metric, ProtectConsole, Reading, SensorStatus } from "@unifi-sensor-latch/shared";
+import type {
+  ConsoleStatus,
+  EffectiveInterval,
+  Latch,
+  Metric,
+  ProtectConsole,
+  Reading,
+  SensorStatus,
+  WebhookDelivery,
+} from "@unifi-sensor-latch/shared";
 import { effectiveInterval } from "@unifi-sensor-latch/shared";
 import { AuthStore } from "./auth";
 import { ConfigStore } from "./config";
@@ -260,11 +269,60 @@ export class LatchEngine {
       const sensorName = sensor?.name ?? reading.sensorId;
 
       if (transition.type === "fired") {
-        void dispatchWebhook(latch.webhook, { latch, sensorName, value: reading.value });
+        void this.dispatchAndRecord(latch, latch.webhook, "fired", sensorName, reading.value);
       } else if (transition.type === "resolved" && latch.resolvedWebhook) {
-        void dispatchWebhook(latch.resolvedWebhook, { latch, sensorName, value: reading.value });
+        void this.dispatchAndRecord(latch, latch.resolvedWebhook, "resolved", sensorName, reading.value);
       }
     }
+  }
+
+  // Shared by real fire/resolve transitions and the Rules page's manual
+  // Test button (sendTestWebhook) — dispatches, then always records the
+  // outcome (success or failure) to webhook_deliveries so "last used" and
+  // the response inspector have something to show regardless of whether
+  // the send actually succeeded.
+  private async dispatchAndRecord(
+    latch: Latch,
+    target: Latch["webhook"],
+    kind: WebhookDelivery["kind"],
+    sensorName: string,
+    value: number
+  ): Promise<void> {
+    const result = await dispatchWebhook(target, { latch, sensorName, value });
+    this.config.recordWebhookDelivery({
+      id: crypto.randomUUID(),
+      latchId: latch.id,
+      kind,
+      url: target.url,
+      method: target.method,
+      ok: result.ok,
+      status: result.status ?? null,
+      error: result.error ?? null,
+      responseBodySnippet: result.responseBodySnippet ?? null,
+      attempts: result.attempts,
+      dispatchedAt: Date.now(),
+    });
+  }
+
+  // Manually triggers the "fired" webhook for a rule (Rules page's Test
+  // button) — same dispatch/record path as a real fire, just recorded as
+  // kind "test" so it's never confused with an actual alarm. Uses the
+  // sensor's current value if we have one (falls back to 0) purely for
+  // template substitution ({{value}}) — no state-machine transition
+  // happens, so this can never accidentally arm/fire/clear a rule.
+  async sendTestWebhook(latchId: string): Promise<void> {
+    const latch = this.config.listLatches().find((l) => l.id === latchId);
+    if (!latch) throw new Error(`no such rule: ${latchId}`);
+
+    const sensor = this.config.listSensors().find((s) => s.id === latch.sensorId);
+    const sensorName = sensor?.name ?? latch.sensorId;
+    const value = this.sensorStatuses.get(latch.sensorId)?.values[latch.metric] ?? 0;
+
+    await this.dispatchAndRecord(latch, latch.webhook, "test", sensorName, value);
+  }
+
+  listWebhookDeliveries(latchId: string): WebhookDelivery[] {
+    return this.config.listWebhookDeliveries(latchId);
   }
 }
 

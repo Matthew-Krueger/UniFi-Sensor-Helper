@@ -1,9 +1,15 @@
-import { eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import type { Latch, LatchStateRecord, ProtectConsole, Sensor } from "@unifi-sensor-latch/shared";
+import type { Latch, LatchStateRecord, ProtectConsole, Sensor, WebhookDelivery } from "@unifi-sensor-latch/shared";
 import { getDb } from "./db";
 import * as schema from "./schema";
-import { latches, latchState, protectConsoles, sensors } from "./schema";
+import { latches, latchState, protectConsoles, sensors, webhookDeliveries } from "./schema";
+
+// Bounds webhook_deliveries growth per rule — pruned on every insert (see
+// recordWebhookDelivery) rather than via a scheduled job, since pruning on
+// write needs no scheduling at all (CLAUDE.md: no external scheduler for
+// periodic tasks).
+const MAX_DELIVERIES_PER_LATCH = 10;
 
 // Typed read/write over the sensors / latches / latch_state /
 // protect_consoles tables via Drizzle. Replaces the config.json read/write
@@ -34,6 +40,22 @@ function latchFromRow(row: typeof schema.latches.$inferSelect): Latch {
     webhook: JSON.parse(row.webhookJson),
     resolvedWebhook: row.resolvedWebhookJson ? JSON.parse(row.resolvedWebhookJson) : undefined,
     enabled: row.enabled,
+  };
+}
+
+function deliveryFromRow(row: typeof schema.webhookDeliveries.$inferSelect): WebhookDelivery {
+  return {
+    id: row.id,
+    latchId: row.latchId,
+    kind: row.kind as WebhookDelivery["kind"],
+    url: row.url,
+    method: row.method as WebhookDelivery["method"],
+    ok: row.ok,
+    status: row.status,
+    error: row.error,
+    responseBodySnippet: row.responseBodySnippet,
+    attempts: row.attempts,
+    dispatchedAt: row.dispatchedAt,
   };
 }
 
@@ -145,6 +167,54 @@ export class ConfigStore {
   deleteLatch(id: string): void {
     this.db.delete(latches).where(eq(latches.id, id)).run();
     this.db.delete(latchState).where(eq(latchState.latchId, id)).run();
+    this.db.delete(webhookDeliveries).where(eq(webhookDeliveries.latchId, id)).run();
+  }
+
+  // Called after every dispatchWebhook (fired/resolved/test — see
+  // singleton.ts's ingest() and the Rules page's Test button) so "last
+  // used" and "inspect the response" have something to read. Prunes to
+  // the most recent MAX_DELIVERIES_PER_LATCH rows for this latch right
+  // after inserting — bounded growth without a retention job.
+  recordWebhookDelivery(delivery: WebhookDelivery): void {
+    this.db
+      .insert(webhookDeliveries)
+      .values({
+        id: delivery.id,
+        latchId: delivery.latchId,
+        kind: delivery.kind,
+        url: delivery.url,
+        method: delivery.method,
+        ok: delivery.ok,
+        status: delivery.status,
+        error: delivery.error,
+        responseBodySnippet: delivery.responseBodySnippet,
+        attempts: delivery.attempts,
+        dispatchedAt: delivery.dispatchedAt,
+      })
+      .run();
+
+    const rows = this.db
+      .select({ id: webhookDeliveries.id })
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.latchId, delivery.latchId))
+      .orderBy(desc(webhookDeliveries.dispatchedAt))
+      .all();
+    const staleIds = rows.slice(MAX_DELIVERIES_PER_LATCH).map((r) => r.id);
+    if (staleIds.length > 0) {
+      this.db.delete(webhookDeliveries).where(inArray(webhookDeliveries.id, staleIds)).run();
+    }
+  }
+
+  // Most recent first — the Rules page shows [0] as "last used" and lists
+  // the rest for inspection.
+  listWebhookDeliveries(latchId: string): WebhookDelivery[] {
+    return this.db
+      .select()
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.latchId, latchId))
+      .orderBy(desc(webhookDeliveries.dispatchedAt))
+      .all()
+      .map(deliveryFromRow);
   }
 
   getLatchState(latchId: string): LatchStateRecord | null {

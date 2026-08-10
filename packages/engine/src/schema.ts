@@ -24,6 +24,26 @@ export const latches = sqliteTable("latches", {
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
 });
 
+// A short history of webhook delivery attempts per rule — "last used" and
+// "inspect the last response" (Rules page) read from here. Pruned to the
+// most recent MAX_DELIVERIES_PER_LATCH rows per latch on insert (see
+// ConfigStore.recordWebhookDelivery) rather than via a scheduled job —
+// CLAUDE.md says no external scheduler for periodic tasks, and pruning
+// inline on write needs no scheduling at all.
+export const webhookDeliveries = sqliteTable("webhook_deliveries", {
+  id: text("id").primaryKey(),
+  latchId: text("latch_id").notNull(),
+  kind: text("kind").notNull(), // "fired" | "resolved" | "test"
+  url: text("url").notNull(),
+  method: text("method").notNull(),
+  ok: integer("ok", { mode: "boolean" }).notNull(),
+  status: integer("status"),
+  error: text("error"),
+  responseBodySnippet: text("response_body_snippet"),
+  attempts: integer("attempts").notNull(),
+  dispatchedAt: integer("dispatched_at").notNull(),
+});
+
 export const latchState = sqliteTable("latch_state", {
   latchId: text("latch_id").primaryKey(),
   state: text("state").notNull().default("idle"), // "idle" | "armed" | "fired"
