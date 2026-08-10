@@ -1,25 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { intervalTooShortMessage, isDurationValid, maskSecret, validateCondition } from "@unifi-sensor-latch/shared";
+import { intervalTooShortMessage, isDurationValid, validateCondition } from "@unifi-sensor-latch/shared";
 import type { Latch } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
-
-// Webhook URLs can embed a bearer-token-equivalent ID (SPEC.md section 6 /
-// CLAUDE.md secret obfuscation) — never echo them back in full.
-function redactLatch(latch: Latch) {
-  return {
-    ...latch,
-    webhook: { ...latch.webhook, url: maskSecret(latch.webhook.url) },
-    resolvedWebhook: latch.resolvedWebhook
-      ? { ...latch.resolvedWebhook, url: maskSecret(latch.resolvedWebhook.url) }
-      : undefined,
-  };
-}
+import { redactLatch } from "@/lib/latchRedaction";
 
 export async function GET() {
   const actor = await requireRole("user");
   if (actor instanceof NextResponse) return actor;
-  const latches = getEngine().config.listLatches().map(redactLatch);
+  const latches = getEngine().config.listLatches().map((l) => redactLatch(l, actor.role));
   return NextResponse.json({ latches });
 }
 
@@ -41,5 +30,5 @@ export async function POST(req: NextRequest) {
   }
 
   engine.config.upsertLatch(latch);
-  return NextResponse.json({ latch: redactLatch(latch) }, { status: 201 });
+  return NextResponse.json({ latch: redactLatch(latch, actor.role) }, { status: 201 });
 }

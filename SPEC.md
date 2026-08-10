@@ -318,10 +318,14 @@ Tables (see `packages/engine/src/db.ts` for the authoritative schema):
 - `users` — operator accounts (see section 3): `username`,
   `password_hash` (argon2id), `created_at`.
 
-If a webhook URL embeds a token or credential, treat that field as
-secret-bearing for logging/display purposes even though it's stored
-alongside non-secret config — see CLAUDE.md's obfuscation section. The
-`/api/latches` Route Handler masks webhook URLs before returning them.
+Webhook URLs are shown in full to `admin`/`superadmin` and masked only
+for the read-only `user` role — see CLAUDE.md's "Secret obfuscation"
+section for why this is an explicit exception rather than the general
+credential-masking rule. The `/api/latches` Route Handlers apply this via
+`apps/web/lib/latchRedaction.ts`. Webhook delivery history
+(`webhook_deliveries` — last 10 attempts per rule, with response body
+snippets, exposed at `GET /api/latches/{id}/deliveries`) follows the same
+admin-only visibility.
 
 ## 7. Protect-side setup (manual, one-time, per resolved latch)
 

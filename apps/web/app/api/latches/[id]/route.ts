@@ -1,18 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { intervalTooShortMessage, isDurationValid, maskSecret, validateCondition } from "@unifi-sensor-latch/shared";
+import { intervalTooShortMessage, isDurationValid, validateCondition } from "@unifi-sensor-latch/shared";
 import type { Latch } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
-
-function redactLatch(latch: Latch) {
-  return {
-    ...latch,
-    webhook: { ...latch.webhook, url: maskSecret(latch.webhook.url) },
-    resolvedWebhook: latch.resolvedWebhook
-      ? { ...latch.resolvedWebhook, url: maskSecret(latch.resolvedWebhook.url) }
-      : undefined,
-  };
-}
+import { redactLatch } from "@/lib/latchRedaction";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const actor = await requireRole("admin");
@@ -45,7 +36,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   engine.config.upsertLatch(updated);
-  return NextResponse.json({ latch: redactLatch(updated) });
+  return NextResponse.json({ latch: redactLatch(updated, actor.role) });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

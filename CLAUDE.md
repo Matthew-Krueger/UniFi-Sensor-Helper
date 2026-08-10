@@ -43,20 +43,26 @@ governs two things:
 
 ## Secret obfuscation
 
-Any value that could be a credential — API keys, the admin password, and
-any webhook URL that embeds a token or ID that's effectively a bearer
-credential — must never appear in full in logs, error messages, or
-anywhere the UI displays configuration back to the user.
+Any value that could be a credential — API keys, the admin password —
+must never appear in full in logs, error messages, or anywhere the UI
+displays configuration back to the user.
 
 Write one shared helper, e.g. `maskSecret(value: string): string`, that
 shows at most the last 4 characters and masks the rest (`••••••••wxyz`).
 Use it at every log call and every API response that echoes configuration
-back, including webhook URLs in the latches list — the UI can show that a
-webhook is configured and roughly where it points, without rendering the
-full URL if it contains a token.
+back.
 
 When in doubt about whether a field is secret-bearing, treat it as if it
 is.
+
+**Webhook URLs are an explicit exception, not covered by the rule
+above.** Project decision: they're shown in full to `admin`/`superadmin`
+(who already have full operational access to rules — create/edit/
+delete/test — so seeing the real URL is a debugging convenience, not a
+new capability) and masked only for the read-only `user` role. See
+`apps/web/lib/latchRedaction.ts`. Response bodies recorded from webhook
+deliveries (`webhook_deliveries` table) follow the same admin-only rule —
+don't expose the delivery-history endpoints to `user`-role requests.
 
 ## Stack
 
