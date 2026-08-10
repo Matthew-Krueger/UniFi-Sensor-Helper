@@ -82,12 +82,42 @@ a generic webpage-summarizer tool, so it was fetched with `curl` instead.
   snapshot on every message. `type` can be `"add"` / `"update"` /
   `"remove"` per the OpenAPI schema (`deviceAdd`/`deviceUpdate`/
   `deviceRemove`), though only `"update"` was observed in this session.
-- **Decision**: push (websocket), not polling. This directly satisfies
-  SPEC.md section 8's polling-frequency question — there's no polling
-  interval to choose since Protect pushes changes as they happen, and the
-  USL-Environmental's own battery-conserving report interval is therefore
-  irrelevant to this app's design (it pushes whenever *it* decides to
-  report, we just listen).
+- **Decision, revised**: push (websocket) *plus* a conservative periodic
+  re-poll, not push alone. Originally decided push-only (below, kept for
+  history) based on an 8-30s test window that only observed wireless
+  signal-strength deltas. Longer live observation (multiple 90s+ capture
+  sessions, and two separate ~5+ minute waits with an app instance
+  actually running against a real console with sensors independently
+  confirmed reporting every 30s in the Protect app itself) never once
+  produced a delta containing a `stats` value change — only
+  connectivity/signal events. Whatever Protect's console does internally
+  to keep its own UI's displayed values current for these sensors, it
+  is not reflected as `stats`-bearing messages on this websocket, at
+  least not within any window tested. The app now also periodically
+  re-runs `GET /v1/sensors` (the same bulk snapshot call used at connect
+  time) on a timer — see `singleton.ts`'s `connectConsole` — at the
+  console's configured `defaultIntervalSeconds` (user-editable, default
+  5 minutes), specifically *not* faster than that per CLAUDE.md's "don't
+  poll faster than the sensor's own reporting interval" rule. The
+  websocket subscription is kept regardless — it's still confirmed live
+  for connectivity/wireless-signal events and is the intended mechanism
+  per the API's design even if this specific hardware class isn't
+  exercising the value-push path we expected.
+- **Bulk delta shape**: `item.id` can be a **string or an array of
+  strings** per `deviceBulkPartialWithReference` in the OpenAPI spec —
+  when multiple devices change the same field(s) at once, Protect can
+  coalesce them into one message sharing a single delta payload. Not
+  observed directly in this session's captures (only single-id messages
+  seen), but the schema allows it and the original ingest code assumed
+  single-id only; fixed defensively (see `readingsFromDeviceEventItem`
+  in `protect.ts`) since an unhandled bulk id would silently drop the
+  reading with no error.
+
+*(Original push-only reasoning, superseded above but kept for context:
+push-only would satisfy SPEC.md section 8's polling-frequency question
+with no interval to choose at all, since Protect would push changes as
+they happen — that held for connectivity events but not, as far as
+this session could observe, for sensor value changes.)*
 
 ### `POST /v1/alarm-manager/webhook/{id}`
 
@@ -113,8 +143,11 @@ a generic webpage-summarizer tool, so it was fetched with `curl` instead.
 - Exact metric enum and units: **lux (unitless), temperature (°C, not
   °F), humidity (%), leak (synthetic 0/1 from a nullable timestamp)** —
   see discrepancy note above.
-- Push vs. poll: **push**, via `/v1/subscribe/devices`. No polling
-  interval needed.
+- Push vs. poll: **both** — push via `/v1/subscribe/devices` for
+  connectivity/signal events, plus a conservative periodic re-poll (at
+  the console's configured interval, never faster) since sensor value
+  changes were never observed arriving as websocket deltas in this
+  session's testing. See the revised decision note above.
 - Auth header: confirmed `X-API-KEY`, confirmed reachable only with a
   valid key (not open on LAN).
 

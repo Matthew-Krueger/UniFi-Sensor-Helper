@@ -23,6 +23,9 @@ export class LatchEngine {
   readonly auth = new AuthStore();
 
   private subscriptions = new Map<string, DeviceSubscription>();
+  // Supplementary re-discovery timer per console — see connectConsole's
+  // comment for why this exists alongside the websocket subscription.
+  private pollTimers = new Map<string, ReturnType<typeof setInterval>>();
   // In-memory only, per ConsoleStatus/SensorStatus's doc comment (shared
   // types) — this is "is it alive right now", not a persisted history.
   private consoleStatuses = new Map<string, ConsoleStatus>();
@@ -102,11 +105,33 @@ export class LatchEngine {
       }
     );
     this.subscriptions.set(consoleConfig.id, subscription);
+
+    // Supplementary to the websocket, not a replacement for it: live
+    // testing against a real console showed the websocket reliably
+    // delivering *some* events (wireless signal strength, connectivity)
+    // but essentially never a metric value change for these battery
+    // sensors — API_NOTES.md's original "push is sufficient, no polling
+    // needed" call doesn't hold up under longer observation. Re-running
+    // discovery periodically re-fetches each sensor's current value via
+    // GET /v1/sensors (the same call discoverSensors already makes once
+    // at connect time) so values actually stay fresh even if the
+    // websocket never pushes a delta for them. Cadence is the console's
+    // own defaultIntervalSeconds — deliberately not faster, per CLAUDE.md
+    // ("don't poll faster than the sensor's own reporting interval").
+    const pollMs = consoleConfig.defaultIntervalSeconds * 1000;
+    const timer = setInterval(() => {
+      this.discoverSensors(consoleConfig).catch((err) => {
+        console.error(`[engine] periodic re-discovery failed for console "${consoleConfig.name}":`, err);
+      });
+    }, pollMs);
+    this.pollTimers.set(consoleConfig.id, timer);
   }
 
   disconnectConsole(consoleId: string): void {
     this.subscriptions.get(consoleId)?.close();
     this.subscriptions.delete(consoleId);
+    clearInterval(this.pollTimers.get(consoleId));
+    this.pollTimers.delete(consoleId);
   }
 
   // Discovery-driven sensor list (SPEC.md section 12) — never hand-typed.

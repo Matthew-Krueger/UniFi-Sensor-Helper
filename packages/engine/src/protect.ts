@@ -193,17 +193,30 @@ export function subscribeDevices(
     });
 
     ws.addEventListener("message", (ev) => {
-      let msg: DeviceEventMessage;
+      // Whole handler wrapped, not just JSON.parse — msg.item is only
+      // guaranteed to exist per the schema for "add"/"update"; anything
+      // else (a keepalive, a shape we haven't seen) threw an uncaught
+      // TypeError here before, silently, with zero visibility into what
+      // actually arrived. Every message is logged (type + modelKey + ids)
+      // — this is deliberately not gated behind a debug flag: it's the
+      // only way to answer "are we actually being fed live data by
+      // Protect" from the server log, and given the real report cadence
+      // (minutes, not seconds — see API_NOTES.md), volume is a non-issue.
       try {
-        msg = JSON.parse(ev.data as string);
-      } catch {
-        return;
-      }
-      if (msg.type !== "update" && msg.type !== "add") return;
-      if (msg.item.modelKey !== "sensor") return;
+        const msg: DeviceEventMessage = JSON.parse(ev.data as string);
+        const ids = msg.item ? (Array.isArray(msg.item.id) ? msg.item.id : [msg.item.id]) : [];
+        console.log(`[protect] ws message: type=${msg.type} modelKey=${msg.item?.modelKey} ids=${ids.join(",")}`);
 
-      for (const reading of readingsFromDeviceEventItem(msg.item, Date.now())) {
-        onReading(reading);
+        if (msg.type !== "update" && msg.type !== "add") return;
+        if (msg.item?.modelKey !== "sensor") return;
+
+        const readings = readingsFromDeviceEventItem(msg.item, Date.now());
+        if (readings.length === 0) {
+          console.log(`[protect] sensor delta had no metric-bearing fields (ids=${ids.join(",")})`);
+        }
+        for (const reading of readings) onReading(reading);
+      } catch (err) {
+        console.error("[protect] failed to process websocket message:", err);
       }
     });
 
