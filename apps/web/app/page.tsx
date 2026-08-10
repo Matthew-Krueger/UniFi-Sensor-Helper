@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Latch, LatchStateRecord, Sensor } from "@unifi-sensor-latch/shared";
 import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { conditionSummary } from "@unifi-sensor-latch/shared";
 
 // Client Component polling /api/state every few seconds — SPEC.md section 5:
 // latch state changes on the order of minutes, so polling is simpler than a
@@ -82,7 +83,7 @@ export default function DashboardPage() {
                   <Badge variant={label as "idle" | "armed" | "fired"}>{label}</Badge>
                 </div>
                 <CardDescription title={sinceTimestamp ? absoluteTimeLabel(sinceTimestamp) : undefined}>
-                  {rule.metric} {rule.direction} {rule.armThreshold}
+                  {rule.metric} {conditionSummary(rule.condition)}
                   {sinceTimestamp ? ` · ${preciseAgoLabel(sinceTimestamp)}` : ""}
                 </CardDescription>
               </CardHeader>

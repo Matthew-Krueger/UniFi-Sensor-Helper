@@ -7,8 +7,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { Latch, ProtectConsole, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
-import { DURATION_PRESETS, effectiveInterval, isDurationValid } from "@unifi-sensor-latch/shared";
+import type { Latch, ProtectConsole, RangeHysteresis, RuleCondition, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
+import {
+  DURATION_PRESETS,
+  conditionSummary,
+  effectiveInterval,
+  isDurationValid,
+  validateCondition,
+} from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 
 // CRUD over /api/latches — "Rule" is the user-facing name for what the
@@ -25,12 +31,21 @@ type MaskedLatch = Omit<Latch, "webhook" | "resolvedWebhook"> & {
   resolvedWebhook?: Latch["resolvedWebhook"];
 };
 
+type ConditionType = "above" | "below" | "between";
+type HysteresisMode = "manual" | "auto";
+
 const emptyForm = {
   sensorId: "",
   metric: "" as Sensor["metrics"][number] | "",
-  direction: "above" as Latch["direction"],
-  armThreshold: "",
-  clearThreshold: "",
+  conditionType: "above" as ConditionType,
+  threshold: "", // above/below
+  low: "", // between
+  high: "", // between
+  hysteresisMode: "manual" as HysteresisMode, // between only — above/below is always manual
+  clearThreshold: "", // above/below manual clear (optional, defaults to threshold)
+  clearLow: "", // between manual
+  clearHigh: "", // between manual
+  marginPercent: "", // between auto
   durationSeconds: "" as number | "",
   webhookUrl: "",
   webhookMethod: "POST" as Latch["webhook"]["method"],
@@ -89,17 +104,42 @@ export default function RulesPage() {
     return effectiveInterval(observed, console_.defaultIntervalSeconds);
   }, [selectedSensor, form.metric, consoles, sensorStatuses]);
 
+  function buildCondition(): RuleCondition {
+    if (form.conditionType === "between") {
+      const low = Number(form.low);
+      const high = Number(form.high);
+      if (!Number.isFinite(low) || !Number.isFinite(high)) throw new Error("low and high bounds must be numbers");
+
+      const hysteresis: RangeHysteresis =
+        form.hysteresisMode === "auto"
+          ? { mode: "auto", marginPercent: Number(form.marginPercent) }
+          : {
+              mode: "manual",
+              clearLow: form.clearLow ? Number(form.clearLow) : low,
+              clearHigh: form.clearHigh ? Number(form.clearHigh) : high,
+            };
+      return { type: "between", low, high, hysteresis };
+    }
+
+    const threshold = Number(form.threshold);
+    if (!Number.isFinite(threshold)) throw new Error("threshold must be a number");
+    const clearThreshold = form.clearThreshold ? Number(form.clearThreshold) : threshold;
+    return { type: form.conditionType, threshold, hysteresis: { mode: "manual", clearThreshold } };
+  }
+
   async function createRule(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     setError(null);
     try {
-      const armThreshold = Number(form.armThreshold);
-      const clearThreshold = form.clearThreshold ? Number(form.clearThreshold) : armThreshold;
       if (!form.sensorId || !form.metric) throw new Error("sensor and metric are required");
       if (form.durationSeconds === "") throw new Error("duration is required");
       const durationSeconds = form.durationSeconds;
-      if (!Number.isFinite(armThreshold)) throw new Error("thresholds must be numbers");
+
+      const condition = buildCondition();
+      const conditionCheck = validateCondition(condition);
+      if (!conditionCheck.valid) throw new Error(conditionCheck.error);
+
       if (selectedInterval && !isDurationValid(durationSeconds, selectedInterval)) {
         throw new Error("selected duration is too short for this sensor's reporting interval");
       }
@@ -108,9 +148,7 @@ export default function RulesPage() {
         id: crypto.randomUUID(),
         sensorId: form.sensorId,
         metric: form.metric as Sensor["metrics"][number],
-        direction: form.direction,
-        armThreshold,
-        clearThreshold,
+        condition,
         durationSeconds,
         webhook: { url: form.webhookUrl, method: form.webhookMethod },
         resolvedWebhook: form.resolvedWebhookUrl
@@ -208,67 +246,160 @@ export default function RulesPage() {
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">Direction</label>
-                    <select
-                      className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                      value={form.direction}
-                      onChange={(e) => setForm({ ...form, direction: e.target.value as Latch["direction"] })}
-                    >
-                      <option value="above">above</option>
-                      <option value="below">below</option>
-                    </select>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">Condition</label>
+                  <select
+                    className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                    value={form.conditionType}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        conditionType: e.target.value as ConditionType,
+                        hysteresisMode: "manual",
+                      })
+                    }
+                  >
+                    <option value="above">is above</option>
+                    <option value="below">is below</option>
+                    <option value="between">is between</option>
+                  </select>
+                </div>
+
+                {form.conditionType === "between" ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">Low bound</label>
+                      <Input
+                        type="number"
+                        value={form.low}
+                        onChange={(e) => setForm({ ...form, low: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">High bound</label>
+                      <Input
+                        type="number"
+                        value={form.high}
+                        onChange={(e) => setForm({ ...form, high: e.target.value })}
+                        required
+                      />
+                    </div>
                   </div>
-                  <div className="col-span-2 flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">
-                      Duration (armed for at least this long before firing)
-                    </label>
-                    <select
-                      className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                      value={form.durationSeconds}
-                      onChange={(e) => setForm({ ...form, durationSeconds: Number(e.target.value) })}
-                      required
-                    >
-                      <option value="" disabled>
-                        Select a duration
-                      </option>
-                      {DURATION_PRESETS.map((p) => {
-                        const tooShort = selectedInterval ? p.seconds < selectedInterval.seconds : false;
-                        return (
-                          <option key={p.seconds} value={p.seconds} disabled={tooShort}>
-                            {p.label}
-                            {tooShort ? " (too short for this sensor)" : ""}
-                          </option>
-                        );
-                      })}
-                    </select>
-                    {selectedInterval && (
-                      <p className="text-xs text-muted-foreground">
-                        This sensor's effective reporting interval is ~{selectedInterval.seconds}s (
-                        {selectedInterval.source.replace("-", " ")}) — durations shorter than that are disabled
-                        above.
-                      </p>
-                    )}
-                  </div>
+                ) : (
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">Arm threshold</label>
+                    <label className="text-xs text-muted-foreground">Threshold</label>
                     <Input
                       type="number"
-                      value={form.armThreshold}
-                      onChange={(e) => setForm({ ...form, armThreshold: e.target.value })}
+                      value={form.threshold}
+                      onChange={(e) => setForm({ ...form, threshold: e.target.value })}
                       required
                     />
                   </div>
+                )}
+
+                {form.conditionType === "between" ? (
+                  <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                    <label className="text-xs text-muted-foreground">
+                      Hysteresis (how far it must move back inside/outside before this can re-arm)
+                    </label>
+                    <div className="flex gap-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={form.hysteresisMode === "manual" ? "default" : "outline"}
+                        onClick={() => setForm({ ...form, hysteresisMode: "manual" })}
+                      >
+                        Manual
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={form.hysteresisMode === "auto" ? "default" : "outline"}
+                        onClick={() => setForm({ ...form, hysteresisMode: "auto" })}
+                      >
+                        Auto
+                      </Button>
+                    </div>
+                    {form.hysteresisMode === "manual" ? (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs text-muted-foreground">Clear below</label>
+                          <Input
+                            type="number"
+                            value={form.clearLow}
+                            onChange={(e) => setForm({ ...form, clearLow: e.target.value })}
+                            placeholder="defaults to low bound"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs text-muted-foreground">Clear above</label>
+                          <Input
+                            type="number"
+                            value={form.clearHigh}
+                            onChange={(e) => setForm({ ...form, clearHigh: e.target.value })}
+                            placeholder="defaults to high bound"
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-muted-foreground">
+                          Margin — percent of the range's width added outside both bounds before it counts as
+                          cleared
+                        </label>
+                        <Input
+                          type="number"
+                          value={form.marginPercent}
+                          onChange={(e) => setForm({ ...form, marginPercent: e.target.value })}
+                          placeholder="e.g. 5"
+                          required
+                        />
+                      </div>
+                    )}
+                  </div>
+                ) : (
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-muted-foreground">Clear threshold (optional)</label>
                     <Input
                       type="number"
                       value={form.clearThreshold}
                       onChange={(e) => setForm({ ...form, clearThreshold: e.target.value })}
-                      placeholder="defaults to arm threshold"
+                      placeholder="defaults to threshold — set this to add hysteresis"
                     />
                   </div>
+                )}
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">
+                    Duration (armed for at least this long before firing)
+                  </label>
+                  <select
+                    className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                    value={form.durationSeconds}
+                    onChange={(e) => setForm({ ...form, durationSeconds: Number(e.target.value) })}
+                    required
+                  >
+                    <option value="" disabled>
+                      Select a duration
+                    </option>
+                    {DURATION_PRESETS.map((p) => {
+                      const tooShort = selectedInterval ? p.seconds < selectedInterval.seconds : false;
+                      return (
+                        <option key={p.seconds} value={p.seconds} disabled={tooShort}>
+                          {p.label}
+                          {tooShort ? " (too short for this sensor)" : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {selectedInterval && (
+                    <p className="text-xs text-muted-foreground">
+                      This sensor's effective reporting interval is ~{selectedInterval.seconds}s (
+                      {selectedInterval.source.replace("-", " ")}) — durations shorter than that are disabled
+                      above.
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex flex-col gap-1">
@@ -323,7 +454,7 @@ export default function RulesPage() {
             <TableRow>
               <TableHead>Sensor</TableHead>
               <TableHead>Metric</TableHead>
-              <TableHead>Threshold</TableHead>
+              <TableHead>Condition</TableHead>
               <TableHead>Duration</TableHead>
               <TableHead>Webhook</TableHead>
               <TableHead>Status</TableHead>
@@ -335,9 +466,7 @@ export default function RulesPage() {
               <TableRow key={rule.id}>
                 <TableCell>{sensorName(rule.sensorId)}</TableCell>
                 <TableCell>{rule.metric}</TableCell>
-                <TableCell>
-                  {rule.direction} {rule.armThreshold}
-                </TableCell>
+                <TableCell>{conditionSummary(rule.condition)}</TableCell>
                 <TableCell>{Math.round(rule.durationSeconds / 60)}m</TableCell>
                 <TableCell className="font-mono text-xs">{rule.webhook.url}</TableCell>
                 <TableCell>
