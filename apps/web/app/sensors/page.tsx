@@ -8,20 +8,13 @@ import type { ProtectConsole, Sensor, SensorStatus } from "@unifi-sensor-latch/s
 import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
+import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
 
 // Discovery-driven — SPEC.md section 12: sensors are never hand-typed, only
 // ever listed from what /api/sensors/discover found on a configured
 // console. If no console is configured yet, this page points to Consoles.
 const POLL_MS = 5000;
 const INTERVAL_PRESETS = DURATION_PRESETS;
-
-function agoLabel(timestamp: number | null): string {
-  if (!timestamp) return "never";
-  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  return `${Math.round(seconds / 3600)}h ago`;
-}
 
 function formatInterval(seconds: number): string {
   const preset = INTERVAL_PRESETS.find((p) => p.seconds === seconds);
@@ -47,6 +40,7 @@ function formatValue(metric: string, value: number): string {
 }
 
 export default function SensorsPage() {
+  useNowTick(); // keeps "last contacted"/"refreshed" ticking live, second-by-second
   const { user: actor } = useCurrentUser();
   const canDiscover = hasRole(actor, "admin");
   const [sensors, setSensors] = React.useState<Sensor[]>([]);
@@ -130,7 +124,9 @@ export default function SensorsPage() {
         {canDiscover && (
           <div className="flex items-center gap-2">
             {lastRefreshedAt && !loading && (
-              <span className="text-xs text-muted-foreground">Refreshed {agoLabel(lastRefreshedAt)}</span>
+              <span className="text-xs text-muted-foreground" title={absoluteTimeLabel(lastRefreshedAt)}>
+                Refreshed {preciseAgoLabel(lastRefreshedAt)}
+              </span>
             )}
             <Button
               variant="outline"
@@ -176,7 +172,11 @@ export default function SensorsPage() {
                       {status?.lastSeenAt ? "reporting" : "no data yet"}
                     </Badge>
                   </div>
-                  <CardDescription>Last contacted: {agoLabel(status?.lastSeenAt ?? null)}</CardDescription>
+                  <CardDescription
+                    title={status?.lastSeenAt ? absoluteTimeLabel(status.lastSeenAt) : undefined}
+                  >
+                    Last contacted: {preciseAgoLabel(status?.lastSeenAt ?? null)}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-2">
                   {sensor.metrics.length === 0 ? (

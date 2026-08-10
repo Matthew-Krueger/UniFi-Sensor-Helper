@@ -4,6 +4,7 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Latch, LatchStateRecord, Sensor } from "@unifi-sensor-latch/shared";
+import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
 
 // Client Component polling /api/state every few seconds — SPEC.md section 5:
 // latch state changes on the order of minutes, so polling is simpler than a
@@ -42,15 +43,8 @@ function useLiveState() {
   return { rules, sensors, states };
 }
 
-function sinceLabel(timestamp: number | null): string | null {
-  if (!timestamp) return null;
-  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  return `${Math.round(seconds / 3600)}h ago`;
-}
-
 export default function DashboardPage() {
+  useNowTick(); // keeps armed/fired "since" timing ticking live, second-by-second
   const { rules, sensors, states } = useLiveState();
   const sensorName = (id: string) => sensors.find((s) => s.id === id)?.name ?? id;
   const stateFor = (ruleId: string) => states.find((s) => s.latchId === ruleId);
@@ -79,7 +73,7 @@ export default function DashboardPage() {
         {rules.map((rule) => {
           const state = stateFor(rule.id);
           const label = state?.state ?? "idle";
-          const since = sinceLabel(label === "armed" ? state?.armedAt ?? null : state?.firedAt ?? null);
+          const sinceTimestamp = label === "armed" ? state?.armedAt ?? null : state?.firedAt ?? null;
           return (
             <Card key={rule.id}>
               <CardHeader>
@@ -87,9 +81,9 @@ export default function DashboardPage() {
                   <CardTitle className="text-base">{sensorName(rule.sensorId)}</CardTitle>
                   <Badge variant={label as "idle" | "armed" | "fired"}>{label}</Badge>
                 </div>
-                <CardDescription>
+                <CardDescription title={sinceTimestamp ? absoluteTimeLabel(sinceTimestamp) : undefined}>
                   {rule.metric} {rule.direction} {rule.armThreshold}
-                  {since ? ` · ${since}` : ""}
+                  {sinceTimestamp ? ` · ${preciseAgoLabel(sinceTimestamp)}` : ""}
                 </CardDescription>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground">

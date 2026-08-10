@@ -10,6 +10,7 @@ import type { ConsoleStatus, ProtectConsole } from "@unifi-sensor-latch/shared";
 import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
+import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
 
 // Reuses the same Unifi-matched preset list Rules use for durations —
 // "how often do we expect a sensor to report" and "how long must a rule
@@ -50,14 +51,6 @@ function badgeVariantFor(state: ConsoleStatus["connectionState"]): "idle" | "arm
   }
 }
 
-function agoLabel(timestamp: number | null): string {
-  if (!timestamp) return "never";
-  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  return `${Math.round(seconds / 3600)}h ago`;
-}
-
 function timeLabel(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString();
 }
@@ -76,6 +69,7 @@ function StepTrace({ steps }: { steps: ConsoleStatus["steps"] }) {
 }
 
 export default function ConsolesPage() {
+  useNowTick(); // keeps "last contacted" ticking live, second-by-second
   const { user: actor, loading: actorLoading } = useCurrentUser();
   const canManage = hasRole(actor, "admin");
 
@@ -254,7 +248,9 @@ export default function ConsolesPage() {
                 <CardContent className="flex flex-col gap-2 text-sm text-muted-foreground">
                   <div>API key: <span className="font-mono">{c.apiKey}</span></div>
                   <div>{status?.sensorCount ?? 0} sensor{status?.sensorCount === 1 ? "" : "s"} discovered</div>
-                  <div>Last contacted: {agoLabel(status?.lastEventAt ?? null)}</div>
+                  <div title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined}>
+                    Last contacted: {preciseAgoLabel(status?.lastEventAt ?? null)}
+                  </div>
                   <div className="flex items-center gap-2">
                     <span>Default expected interval:</span>
                     {canManage ? (
