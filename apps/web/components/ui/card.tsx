@@ -1,9 +1,20 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
+// Glassmorphism baseline used everywhere a Card appears: translucent
+// purple-tinted background + backdrop-blur so app-backdrop's fixed glow
+// (see globals.css) shows through, a faint purple border for "offset",
+// and a soft purple-tinted shadow instead of a flat gray one.
 const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
-    <div ref={ref} className={cn("rounded-lg border border-border bg-card text-card-foreground shadow-sm", className)} {...props} />
+    <div
+      ref={ref}
+      className={cn(
+        "rounded-lg border border-purple-100/80 bg-card/70 text-card-foreground shadow-lg shadow-purple-950/5 backdrop-blur-md dark:border-purple-900/40 dark:bg-card/60 dark:shadow-purple-950/30",
+        className
+      )}
+      {...props}
+    />
   )
 );
 Card.displayName = "Card";

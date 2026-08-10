@@ -33,3 +33,22 @@ body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
 }
+
+/* Subtle fixed purple glow behind the page content — gives the glass
+   cards/sidebar (see ui/card.tsx, nav-drawer.tsx) something to visibly
+   blur over. Fixed + -z-10 so it doesn't scroll or interfere with layout. */
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 40% at 15% 0%, rgba(168, 85, 247, 0.10), transparent 60%),
+    radial-gradient(ellipse 50% 40% at 100% 20%, rgba(126, 34, 206, 0.08), transparent 60%);
+}
+
+.dark .app-backdrop {
+  background:
+    radial-gradient(ellipse 60% 40% at 15% 0%, rgba(88, 28, 135, 0.35), transparent 60%),
+    radial-gradient(ellipse 50% 40% at 100% 20%, rgba(59, 7, 100, 0.30), transparent 60%);
+}

@@ -56,7 +56,10 @@ const SheetContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Co
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col gap-4 border-r border-border bg-background p-6 shadow-lg",
+          // Subtler glass treatment than Card — this is chrome the user
+          // looks past all day, not a focal surface, so less tint and no
+          // purple border, just enough blur/translucency to read as glass.
+          "fixed inset-y-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col gap-4 border-r border-border bg-background/80 p-6 shadow-lg backdrop-blur-lg dark:bg-background/70",
           animated &&
             "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left data-[state=closed]:duration-200 data-[state=open]:duration-300",
           className

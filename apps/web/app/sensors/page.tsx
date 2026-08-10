@@ -229,10 +229,7 @@ export default function SensorsPage() {
             const badge = reportingBadge(status?.lastEventAt ?? null, observedSeconds, console_.defaultIntervalSeconds);
 
             return (
-              <Card
-                key={console_.id}
-                className="border-purple-100 bg-gradient-to-b from-purple-50 to-card shadow-lg shadow-purple-950/5 dark:border-purple-950/60 dark:from-purple-950/30 dark:to-card dark:shadow-purple-950/40"
-              >
+              <Card key={console_.id}>
                 <CardHeader>
                   <div className="flex items-center justify-between gap-2">
                     <CardTitle>{console_.name}</CardTitle>
@@ -250,7 +247,7 @@ export default function SensorsPage() {
                       return (
                         <div
                           key={sensor.id}
-                          className="flex flex-col items-center gap-2 rounded-lg border border-purple-100 bg-purple-50/60 p-3 text-center shadow-sm shadow-purple-950/5 dark:border-purple-900/60 dark:bg-purple-950/20 dark:shadow-purple-950/30"
+                          className="flex flex-col items-center gap-2 rounded-lg border border-purple-200/60 bg-purple-50/50 p-3 text-center backdrop-blur-sm dark:border-purple-800/40 dark:bg-purple-950/30"
                         >
                           <p className="text-sm font-medium">{sensor.name}</p>
                           {sensor.metrics.length === 0 ? (
