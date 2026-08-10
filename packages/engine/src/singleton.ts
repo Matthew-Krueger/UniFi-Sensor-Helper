@@ -20,6 +20,7 @@ import {
   type DeviceSubscription,
 } from "./protect";
 import { dispatchWebhook } from "./webhookDispatcher";
+import { resolveWebhookTarget } from "./resolveWebhookTarget";
 import { applyReading, initialState } from "./stateMachine";
 
 // The latch engine singleton. Boots once in apps/web/server.ts before the
@@ -288,13 +289,37 @@ export class LatchEngine {
     sensorName: string,
     value: number
   ): Promise<void> {
-    const result = await dispatchWebhook(target, { latch, sensorName, value });
+    // Resolution (looking up a "console" target's host/apiKey) can fail —
+    // e.g. the console was deleted after this rule was configured to use
+    // it — and that's just as much a real delivery failure as a network
+    // error, so it's recorded the same way rather than thrown and lost.
+    let resolved;
+    try {
+      resolved = resolveWebhookTarget(target, this.config);
+    } catch (err) {
+      this.config.recordWebhookDelivery({
+        id: crypto.randomUUID(),
+        latchId: latch.id,
+        kind,
+        url: target.kind === "custom" ? target.url : `console:${target.consoleId}/${target.webhookId}`,
+        method: target.kind === "custom" ? target.method : "POST",
+        ok: false,
+        status: null,
+        error: err instanceof Error ? err.message : String(err),
+        responseBodySnippet: null,
+        attempts: 0,
+        dispatchedAt: Date.now(),
+      });
+      return;
+    }
+
+    const result = await dispatchWebhook(resolved, { latch, sensorName, value });
     this.config.recordWebhookDelivery({
       id: crypto.randomUUID(),
       latchId: latch.id,
       kind,
-      url: target.url,
-      method: target.method,
+      url: resolved.url,
+      method: resolved.method,
       ok: result.ok,
       status: result.status ?? null,
       error: result.error ?? null,

@@ -1,9 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { intervalTooShortMessage, isDurationValid, validateCondition } from "@unifi-sensor-latch/shared";
-import type { Latch } from "@unifi-sensor-latch/shared";
+import { intervalTooShortMessage, isDurationValid, validateCondition, validateWebhookTarget } from "@unifi-sensor-latch/shared";
+import type { Latch, WebhookTarget } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
 import { redactLatch } from "@/lib/latchRedaction";
+
+// The edit form never has the real bearerToken to resend (GET always
+// masks it — see latchRedaction.ts), so a blank bearerToken on an edit
+// means "keep the existing one," never "clear it." Mirrors how
+// /api/consoles/[id] handles apiKey.
+function preserveBearerToken(next: WebhookTarget, existing: WebhookTarget | undefined): WebhookTarget {
+  if (next.kind !== "custom" || next.bearerToken) return next;
+  if (existing?.kind === "custom" && existing.bearerToken) {
+    return { ...next, bearerToken: existing.bearerToken };
+  }
+  return next;
+}
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const actor = await requireRole("admin");
@@ -16,11 +28,28 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const patch = (await req.json()) as Partial<Latch>;
   const updated: Latch = { ...existing, ...patch, id };
+  if (patch.webhook !== undefined) updated.webhook = preserveBearerToken(patch.webhook, existing.webhook);
+  if (patch.resolvedWebhook !== undefined) {
+    updated.resolvedWebhook = preserveBearerToken(patch.resolvedWebhook, existing.resolvedWebhook);
+  }
 
   if (patch.condition !== undefined) {
     const conditionCheck = validateCondition(updated.condition);
     if (!conditionCheck.valid) {
       return NextResponse.json({ error: conditionCheck.error }, { status: 400 });
+    }
+  }
+
+  if (patch.webhook !== undefined) {
+    const webhookCheck = validateWebhookTarget(updated.webhook);
+    if (!webhookCheck.valid) {
+      return NextResponse.json({ error: webhookCheck.error }, { status: 400 });
+    }
+  }
+  if (patch.resolvedWebhook !== undefined && updated.resolvedWebhook) {
+    const resolvedCheck = validateWebhookTarget(updated.resolvedWebhook);
+    if (!resolvedCheck.valid) {
+      return NextResponse.json({ error: resolvedCheck.error }, { status: 400 });
     }
   }
 

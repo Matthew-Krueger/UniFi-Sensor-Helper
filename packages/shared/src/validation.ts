@@ -32,6 +32,10 @@ export const passwordSchema = z
 export const consoleNameSchema = z.string().min(1).max(100, "Name must be 100 characters or fewer");
 export const consoleHostSchema = z.string().min(1).max(255, "Host must be 255 characters or fewer");
 export const consoleApiKeySchema = z.string().min(1).max(512, "API key must be 512 characters or fewer");
+// Opaque, operator-chosen ID for a Protect Alarm Manager "trigger via
+// webhook" rule (SPEC.md section 7) — no format Protect itself enforces,
+// just a length bound.
+export const consoleWebhookIdSchema = z.string().min(1).max(256, "Webhook ID must be 256 characters or fewer");
 
 // Expected-interval fields (console default, per-sensor override) — 10s
 // floor rules out an accidentally-entered value that'd make every rule

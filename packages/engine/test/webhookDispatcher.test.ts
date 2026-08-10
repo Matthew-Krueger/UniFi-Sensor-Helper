@@ -1,15 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import type { Latch, WebhookTarget } from "@unifi-sensor-latch/shared";
-import { dispatchWebhook } from "../src/webhookDispatcher";
+import type { Latch } from "@unifi-sensor-latch/shared";
+import { dispatchWebhook, type ResolvedWebhookTarget } from "../src/webhookDispatcher";
 
+// dispatchWebhook takes an already-resolved target (see
+// resolveWebhookTarget.test.ts for the "console" kind -> concrete URL
+// resolution) — the Latch's own `webhook` field only matters here for
+// DispatchContext's template substitution (condition/duration), not for
+// what URL gets hit.
 const latch: Latch = {
   id: "freezer-temp",
   sensorId: "sensor-1",
   metric: "temperature",
   condition: { type: "above", threshold: 55, hysteresis: { mode: "manual", clearThreshold: 38 } },
   durationSeconds: 600,
-  webhook: { url: "https://example.invalid/webhook/fired?token=supersecret123", method: "POST" },
+  webhook: { kind: "custom", url: "https://example.invalid/webhook/fired?token=supersecret123", method: "POST" },
   enabled: true,
+};
+
+const resolvedTarget: ResolvedWebhookTarget = {
+  url: "https://example.invalid/webhook/fired?token=supersecret123",
+  method: "POST",
 };
 
 describe("dispatchWebhook", () => {
@@ -20,7 +30,7 @@ describe("dispatchWebhook", () => {
       return new Response(null, { status: 204 });
     };
 
-    const result = await dispatchWebhook(latch.webhook, { latch, sensorName: "Walk-in Freezer", value: 60 }, fakeFetch as any);
+    const result = await dispatchWebhook(resolvedTarget, { latch, sensorName: "Walk-in Freezer", value: 60 }, fakeFetch as any);
 
     expect(result.ok).toBe(true);
     expect(result.attempts).toBe(1);
@@ -36,7 +46,7 @@ describe("dispatchWebhook", () => {
     };
 
     const result = await dispatchWebhook(
-      latch.webhook,
+      resolvedTarget,
       { latch, sensorName: "Walk-in Freezer", value: 60 },
       fakeFetch as any,
       1 // near-zero retry delay for test speed
@@ -54,7 +64,7 @@ describe("dispatchWebhook", () => {
     };
 
     const result = await dispatchWebhook(
-      latch.webhook,
+      resolvedTarget,
       { latch, sensorName: "Walk-in Freezer", value: 60 },
       fakeFetch as any,
       1
@@ -71,7 +81,7 @@ describe("dispatchWebhook", () => {
       return new Response(null, { status: 200 });
     };
 
-    const target: WebhookTarget = {
+    const target: ResolvedWebhookTarget = {
       url: "https://example.invalid/webhook",
       method: "POST",
       bodyTemplate: "{{sensorName}} {{metric}} is {{value}} (threshold {{threshold}}, armed {{durationMinutes}}m)",
@@ -89,7 +99,7 @@ describe("dispatchWebhook", () => {
 
     try {
       const fakeFetch = async () => new Response(null, { status: 200 });
-      await dispatchWebhook(latch.webhook, { latch, sensorName: "Walk-in Freezer", value: 60 }, fakeFetch as any);
+      await dispatchWebhook(resolvedTarget, { latch, sensorName: "Walk-in Freezer", value: 60 }, fakeFetch as any);
     } finally {
       console.log = originalLog;
     }

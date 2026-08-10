@@ -91,5 +91,8 @@ export const protectConsoles = sqliteTable("protect_consoles", {
   // per-sensor). Used as the fallback for rule-duration validation until
   // a sensor's real interval has been observed from actual reading gaps.
   defaultIntervalSeconds: integer("default_interval_seconds").notNull().default(300),
+  // Default Alarm Manager webhook ID (SPEC.md section 7) — see
+  // shared/src/types.ts's ProtectConsole.defaultWebhookId doc comment.
+  defaultWebhookId: text("default_webhook_id"),
   createdAt: integer("created_at").notNull(),
 });

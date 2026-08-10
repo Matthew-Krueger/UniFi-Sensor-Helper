@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { intervalTooShortMessage, isDurationValid, validateCondition } from "@unifi-sensor-latch/shared";
+import { intervalTooShortMessage, isDurationValid, validateCondition, validateWebhookTarget } from "@unifi-sensor-latch/shared";
 import type { Latch } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
 import { redactLatch } from "@/lib/latchRedaction";
@@ -21,6 +21,17 @@ export async function POST(req: NextRequest) {
   const conditionCheck = validateCondition(latch.condition);
   if (!conditionCheck.valid) {
     return NextResponse.json({ error: conditionCheck.error }, { status: 400 });
+  }
+
+  const webhookCheck = validateWebhookTarget(latch.webhook);
+  if (!webhookCheck.valid) {
+    return NextResponse.json({ error: webhookCheck.error }, { status: 400 });
+  }
+  if (latch.resolvedWebhook) {
+    const resolvedCheck = validateWebhookTarget(latch.resolvedWebhook);
+    if (!resolvedCheck.valid) {
+      return NextResponse.json({ error: resolvedCheck.error }, { status: 400 });
+    }
   }
 
   const engine = getEngine();

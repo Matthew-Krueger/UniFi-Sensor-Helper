@@ -4,10 +4,10 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { ConsoleStatus, ProtectConsole } from "@unifi-sensor-latch/shared";
-import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
+import { DURATION_PRESETS, buildConsoleWebhookUrl } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
 import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
@@ -76,10 +76,12 @@ export default function ConsolesPage() {
   const [consoles, setConsoles] = React.useState<ProtectConsole[]>([]);
   const [statuses, setStatuses] = React.useState<ConsoleStatus[]>([]);
   const [open, setOpen] = React.useState(false);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
   const [name, setName] = React.useState("");
   const [host, setHost] = React.useState("");
   const [apiKey, setApiKey] = React.useState("");
   const [defaultIntervalSeconds, setDefaultIntervalSeconds] = React.useState(300);
+  const [defaultWebhookId, setDefaultWebhookId] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [savingMessage, setSavingMessage] = React.useState<string | null>(null);
@@ -115,23 +117,53 @@ export default function ConsolesPage() {
     return () => clearInterval(id);
   }, [load, anyActive]);
 
-  async function addConsole(e: React.FormEvent) {
+  function resetForm() {
+    setName("");
+    setHost("");
+    setApiKey("");
+    setDefaultIntervalSeconds(300);
+    setDefaultWebhookId("");
+  }
+
+  function openAddDialog() {
+    resetForm();
+    setEditingId(null);
+    setError(null);
+    setOpen(true);
+  }
+
+  function openEditDialog(c: ProtectConsole) {
+    setName(c.name);
+    setHost(c.host);
+    setApiKey(""); // never round-tripped — see PATCH /api/consoles/[id]'s comment
+    setDefaultIntervalSeconds(c.defaultIntervalSeconds);
+    setDefaultWebhookId(c.defaultWebhookId ?? "");
+    setEditingId(c.id);
+    setError(null);
+    setOpen(true);
+  }
+
+  async function submitConsole(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    setSavingMessage(`Attempting to add console "${name}"…`);
+    setSavingMessage(editingId ? `Saving "${name}"…` : `Attempting to add console "${name}"…`);
     setError(null);
     try {
-      const res = await fetch("/api/consoles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, host, apiKey, defaultIntervalSeconds }),
-      });
+      const res = editingId
+        ? await fetch(`/api/consoles/${editingId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, host, apiKey, defaultIntervalSeconds, defaultWebhookId }),
+          })
+        : await fetch("/api/consoles", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, host, apiKey, defaultIntervalSeconds, defaultWebhookId }),
+          });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "failed to save console");
-      setName("");
-      setHost("");
-      setApiKey("");
-      setDefaultIntervalSeconds(300);
+      resetForm();
+      setEditingId(null);
       setOpen(false);
       await load();
     } catch (err) {
@@ -163,56 +195,83 @@ export default function ConsolesPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Protect Consoles</h1>
         {canManage && (
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button size="sm">Add Console</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Add a console</DialogTitle>
-              </DialogHeader>
-              <form className="flex flex-col gap-3" onSubmit={addConsole}>
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">Name</label>
-                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Main site NVR" required />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">Host / IP</label>
-                  <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.1" required />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">API key</label>
-                  <Input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="generated at unifi.ui.com"
-                    required
-                  />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">Default expected interval</label>
-                  <select
-                    className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                    value={defaultIntervalSeconds}
-                    onChange={(e) => setDefaultIntervalSeconds(Number(e.target.value))}
-                  >
-                    {INTERVAL_PRESETS.map((p) => (
-                      <option key={p.seconds} value={p.seconds}>
-                        {p.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {error && <p className="text-sm text-red-600">{error}</p>}
-                <Button type="submit" disabled={saving}>
-                  {saving ? "Adding…" : "Add console"}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
+          <Button size="sm" onClick={openAddDialog}>
+            Add Console
+          </Button>
         )}
       </div>
+
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) {
+            resetForm();
+            setEditingId(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingId ? "Edit console" : "Add a console"}</DialogTitle>
+          </DialogHeader>
+          <form className="flex flex-col gap-3" onSubmit={submitConsole}>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Name</label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Main site NVR" required />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Host / IP</label>
+              <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.1" required />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">API key</label>
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={editingId ? "leave blank to keep the existing key" : "generated at unifi.ui.com"}
+                required={!editingId}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Default expected interval</label>
+              <select
+                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                value={defaultIntervalSeconds}
+                onChange={(e) => setDefaultIntervalSeconds(Number(e.target.value))}
+              >
+                {INTERVAL_PRESETS.map((p) => (
+                  <option key={p.seconds} value={p.seconds}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Default Alarm Manager webhook ID (optional)</label>
+              <Input
+                value={defaultWebhookId}
+                onChange={(e) => setDefaultWebhookId(e.target.value)}
+                placeholder="e.g. freezer-alerts"
+              />
+              <p className="text-xs text-muted-foreground">
+                Matches the ID on a "trigger via webhook" Alarm Manager rule you create once in Protect's own UI
+                (SPEC.md §7). Rules that deliver to this console default to this ID{host && defaultWebhookId ? ":" : "."}
+              </p>
+              {host && defaultWebhookId && (
+                <p className="break-all font-mono text-xs text-muted-foreground">
+                  {buildConsoleWebhookUrl(host, defaultWebhookId)}
+                </p>
+              )}
+            </div>
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : editingId ? "Save changes" : "Add console"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {savingMessage && (
         <div className="rounded-md border border-border bg-muted/50 px-4 py-2 text-sm text-muted-foreground">
@@ -269,14 +328,22 @@ export default function ConsolesPage() {
                       <span>{INTERVAL_PRESETS.find((p) => p.seconds === c.defaultIntervalSeconds)?.label ?? `${c.defaultIntervalSeconds}s`}</span>
                     )}
                   </div>
+                  <div>
+                    Default webhook ID: {c.defaultWebhookId ?? <span className="italic">not set</span>}
+                  </div>
                   {status?.applicationVersion && <div>Firmware: {status.applicationVersion}</div>}
                   {status?.latencyMs != null && <div>API latency: {status.latencyMs}ms</div>}
                   {status?.error && <div className="text-red-600 dark:text-red-400">{status.error}</div>}
                   {status && <StepTrace steps={status.steps} />}
                   {canManage && (
-                    <Button variant="ghost" size="sm" className="mt-1 w-fit" onClick={() => removeConsole(c.id)}>
-                      Remove
-                    </Button>
+                    <div className="mt-1 flex gap-1">
+                      <Button variant="outline" size="sm" onClick={() => openEditDialog(c)}>
+                        Edit
+                      </Button>
+                      <Button variant="destructive" size="sm" onClick={() => removeConsole(c.id)}>
+                        Remove
+                      </Button>
+                    </div>
                   )}
                 </CardContent>
               </Card>

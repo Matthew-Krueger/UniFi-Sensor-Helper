@@ -4,6 +4,7 @@ import {
   consoleApiKeySchema,
   consoleHostSchema,
   consoleNameSchema,
+  consoleWebhookIdSchema,
   intervalSecondsSchema,
   maskSecret,
 } from "@unifi-sensor-latch/shared";
@@ -48,6 +49,13 @@ export async function POST(req: NextRequest) {
     defaultIntervalSeconds = interval.data;
   }
 
+  let defaultWebhookId: string | null = null;
+  if (body.defaultWebhookId) {
+    const webhookId = consoleWebhookIdSchema.safeParse(body.defaultWebhookId);
+    if (!webhookId.success) return NextResponse.json({ error: webhookId.error.issues[0]?.message }, { status: 400 });
+    defaultWebhookId = webhookId.data;
+  }
+
   const engine = getEngine();
   const id: string = typeof body.id === "string" && body.id ? body.id : crypto.randomUUID();
   const console_: ProtectConsole = {
@@ -56,6 +64,7 @@ export async function POST(req: NextRequest) {
     host: host.data,
     apiKey: apiKey.data,
     defaultIntervalSeconds,
+    defaultWebhookId,
     createdAt: Date.now(),
   };
 

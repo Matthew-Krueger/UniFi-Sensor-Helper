@@ -1,6 +1,6 @@
 import { desc, eq, inArray } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import type { Latch, LatchStateRecord, ProtectConsole, Sensor, WebhookDelivery } from "@unifi-sensor-latch/shared";
+import type { Latch, LatchStateRecord, ProtectConsole, Sensor, WebhookDelivery, WebhookTarget } from "@unifi-sensor-latch/shared";
 import { getDb } from "./db";
 import * as schema from "./schema";
 import { latches, latchState, protectConsoles, sensors, webhookDeliveries } from "./schema";
@@ -26,8 +26,24 @@ function consoleFromRow(row: typeof schema.protectConsoles.$inferSelect): Protec
     host: row.host,
     apiKey: row.apiKey,
     defaultIntervalSeconds: row.defaultIntervalSeconds,
+    defaultWebhookId: row.defaultWebhookId,
     createdAt: row.createdAt,
   };
+}
+
+// WebhookTarget used to be a flat {url, method, headers?, bodyTemplate?}
+// shape (pre-console-webhook redesign) with no `kind` discriminant. Any
+// row written before that migration parses back with `kind` undefined —
+// rather than crash on every downstream `target.kind === "..."` check,
+// treat that shape as a legacy "custom" target (dropping the old
+// free-form `headers`, which the new shape replaced with a single
+// `bearerToken` — nothing ever used more than one header in practice).
+function normalizeWebhookTarget(raw: unknown): WebhookTarget {
+  const parsed = raw as Partial<WebhookTarget> & { url?: string; method?: "GET" | "POST" };
+  if (parsed && (parsed as WebhookTarget).kind === undefined && typeof parsed.url === "string") {
+    return { kind: "custom", url: parsed.url, method: parsed.method ?? "POST" };
+  }
+  return parsed as WebhookTarget;
 }
 
 function latchFromRow(row: typeof schema.latches.$inferSelect): Latch {
@@ -37,8 +53,8 @@ function latchFromRow(row: typeof schema.latches.$inferSelect): Latch {
     metric: row.metric as Latch["metric"],
     condition: JSON.parse(row.conditionJson),
     durationSeconds: row.durationSeconds,
-    webhook: JSON.parse(row.webhookJson),
-    resolvedWebhook: row.resolvedWebhookJson ? JSON.parse(row.resolvedWebhookJson) : undefined,
+    webhook: normalizeWebhookTarget(JSON.parse(row.webhookJson)),
+    resolvedWebhook: row.resolvedWebhookJson ? normalizeWebhookTarget(JSON.parse(row.resolvedWebhookJson)) : undefined,
     enabled: row.enabled,
   };
 }
@@ -110,6 +126,7 @@ export class ConfigStore {
         host: console.host,
         apiKey: console.apiKey,
         defaultIntervalSeconds: console.defaultIntervalSeconds,
+        defaultWebhookId: console.defaultWebhookId,
         createdAt: console.createdAt,
       })
       .onConflictDoUpdate({
@@ -119,6 +136,7 @@ export class ConfigStore {
           host: console.host,
           apiKey: console.apiKey,
           defaultIntervalSeconds: console.defaultIntervalSeconds,
+          defaultWebhookId: console.defaultWebhookId,
         },
       })
       .run();

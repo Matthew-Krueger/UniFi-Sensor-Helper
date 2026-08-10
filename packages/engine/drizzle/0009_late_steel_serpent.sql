@@ -1,0 +1,1 @@
+ALTER TABLE `protect_consoles` ADD `default_webhook_id` text;

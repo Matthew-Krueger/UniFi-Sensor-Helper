@@ -34,8 +34,10 @@ function baseUrl(config: ProtectConfig): string {
 // Bun-specific fetch/WebSocket option to accept the console's self-signed
 // cert — confirmed necessary live, see API_NOTES.md "Auth" section. This is
 // about the outbound connection to the Protect console, unrelated to this
-// app's own inbound HTTPS cert (CLAUDE.md process isolation).
-const insecureTls = { tls: { rejectUnauthorized: false } };
+// app's own inbound HTTPS cert (CLAUDE.md process isolation). Exported so
+// resolveWebhookTarget.ts can apply the same treatment to "console" kind
+// webhook deliveries — same console, same self-signed cert.
+export const insecureTls = { tls: { rejectUnauthorized: false } };
 
 // An unreachable/blackholed host (wrong IP, firewalled) otherwise hangs
 // the request for the OS's TCP connect timeout — often a minute or more —
@@ -237,13 +239,4 @@ export function subscribeDevices(
       ws?.close();
     },
   };
-}
-
-// Triggers a configured Alarm Manager rule (SPEC.md section 7) — used only
-// if a deployment prefers Protect-side notification delivery over the
-// latch's own webhook.url; not on the default path (see API_NOTES.md).
-export async function triggerAlarmWebhook(config: ProtectConfig, alarmTriggerId: string): Promise<void> {
-  await protectFetch(config, `/v1/alarm-manager/webhook/${encodeURIComponent(alarmTriggerId)}`, {
-    method: "POST",
-  });
 }

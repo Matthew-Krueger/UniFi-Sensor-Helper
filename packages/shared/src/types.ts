@@ -27,15 +27,41 @@ export interface ProtectConsole {
   // console with no per-sensor override and no observed data yet. See
   // packages/shared/src/interval.ts.
   defaultIntervalSeconds: number;
+  // Default Alarm Manager webhook ID for this console (SPEC.md section 7
+  // — a manual, one-time setup step per site: one "trigger via webhook"
+  // Alarm Manager rule in Protect's own UI, whose ID goes here). Prefills
+  // a rule's webhook-id field when its webhook is set to "console" kind
+  // and this console is selected — see consoleWebhook.ts. Not the only
+  // ID a rule can use: a rule can still override it (e.g. a different
+  // Alarm Manager rule for the resolved event), this is just the
+  // convenient default. Null until the operator sets one.
+  defaultWebhookId: string | null;
   createdAt: number;
 }
 
-export interface WebhookTarget {
-  url: string;
-  method: "GET" | "POST";
-  headers?: Record<string, string>;
-  bodyTemplate?: string; // {{sensorName}}, {{metric}}, {{value}}, {{threshold}}, {{durationMinutes}}
-}
+// Where a rule's webhook actually goes. Two kinds:
+//  - "console": delivers to a Protect console's own Alarm Manager webhook
+//    endpoint (POST /proxy/protect/integration/v1/alarm-manager/webhook/
+//    {webhookId}, authenticated with that console's API key — see
+//    consoleWebhook.ts) — the intended, primary path for this app
+//    (SPEC.md section 7): Protect's own alarm/notification system does
+//    the actual delivery to a phone, this app just decides when.
+//  - "custom": an arbitrary external URL, optionally bearer-token
+//    authenticated. No other auth/header customization is supported for
+//    now (YAGNI — nothing has needed more than a bearer token yet).
+// Resolved to a concrete {url, method, headers} at dispatch time by
+// packages/engine/src/resolveWebhookTarget.ts, which is the only place
+// that needs a ConfigStore (to look up the console) — this type itself
+// has no engine dependency.
+export type WebhookTarget =
+  | { kind: "console"; consoleId: string; webhookId: string }
+  | {
+      kind: "custom";
+      url: string;
+      method: "GET" | "POST";
+      bearerToken?: string;
+      bodyTemplate?: string; // {{sensorName}}, {{metric}}, {{value}}, {{threshold}}, {{durationMinutes}}
+    };
 
 export interface Latch {
   id: string;

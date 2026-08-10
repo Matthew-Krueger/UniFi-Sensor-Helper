@@ -1,11 +1,31 @@
-import type { Latch, WebhookTarget } from "@unifi-sensor-latch/shared";
+import type { Latch } from "@unifi-sensor-latch/shared";
 import { maskSecret, conditionThresholdTemplateValue } from "@unifi-sensor-latch/shared";
+import { insecureTls } from "./protect";
 
 // Fires the webhook configured on a Latch's "fired" or "resolvedWebhook"
 // transition. Pure-ish: the only I/O is the injected `fetchImpl` (defaults
 // to global fetch), which makes retries and masking testable without a
-// real network call. Never logs a webhook URL in full — CLAUDE.md secret
-// obfuscation, since a URL can embed a token/id that's a bearer credential.
+// real network call. Server-side log lines still mask the URL even though
+// the UI no longer does for admins (CLAUDE.md) — logs land on disk/journal
+// regardless of role, so this stays conservative independent of that.
+//
+// Takes an already-*resolved* target (concrete url/method/headers), not
+// the stored WebhookTarget union — resolving "console" kind into a real
+// URL + X-API-KEY header needs a ConfigStore lookup, which lives in
+// resolveWebhookTarget.ts, not here. Keeps this module free of any engine
+// dependency, same as before.
+export interface ResolvedWebhookTarget {
+  url: string;
+  method: "GET" | "POST";
+  headers?: Record<string, string>;
+  bodyTemplate?: string;
+  // Set for "console" kind targets — Protect consoles run a self-signed
+  // cert by default (API_NOTES.md), same as every other call this app
+  // makes to one (see protect.ts's insecureTls). Never set for "custom"
+  // targets: an arbitrary external URL should still get normal cert
+  // verification.
+  insecure?: boolean;
+}
 
 export interface DispatchContext {
   latch: Latch;
@@ -53,7 +73,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function dispatchWebhook(
-  target: WebhookTarget,
+  target: ResolvedWebhookTarget,
   ctx: DispatchContext,
   fetchImpl: typeof fetch = fetch,
   retryDelayMs = RETRY_DELAY_MS
@@ -69,7 +89,8 @@ export async function dispatchWebhook(
         method: target.method,
         headers: target.headers,
         body: target.method === "POST" ? body : undefined,
-      });
+        ...(target.insecure ? insecureTls : {}),
+      } as RequestInit);
       lastResponseSnippet = await readResponseSnippet(res);
 
       if (res.ok) {

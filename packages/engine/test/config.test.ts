@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ConfigStore } from "../src/config";
 import { createTestDb } from "../src/db";
+import { latches } from "../src/schema";
 
 // Covers CLAUDE.md's fifth required case: a restart mid-armed-state behaves
 // sanely. The state machine is pure (see stateMachine.test.ts); persistence
@@ -41,7 +42,7 @@ describe("ConfigStore latch state persistence", () => {
       metric: "temperature",
       condition: { type: "above", threshold: 55, hysteresis: { mode: "manual", clearThreshold: 38 } },
       durationSeconds: 600,
-      webhook: { url: "https://example.invalid/webhook", method: "POST" },
+      webhook: { kind: "custom", url: "https://example.invalid/webhook", method: "POST" },
       enabled: true,
     });
 
@@ -50,5 +51,33 @@ describe("ConfigStore latch state persistence", () => {
     const condition = store.listLatches()[0]?.condition;
     expect(condition?.type).toBe("above");
     expect(condition?.type === "above" && condition.hysteresis.clearThreshold).toBe(38);
+  });
+
+  test("a legacy flat webhook row (pre-console-webhook, no `kind`) normalizes to a custom target", () => {
+    const db = createTestDb();
+    const store = new ConfigStore(db);
+
+    // Simulates a row written before the console-webhook redesign — back
+    // when WebhookTarget was just {url, method, headers?, bodyTemplate?}
+    // with no discriminant. See config.ts's normalizeWebhookTarget.
+    db.insert(latches)
+      .values({
+        id: "legacy-rule",
+        sensorId: "sensor-1",
+        metric: "temperature",
+        conditionJson: JSON.stringify({
+          type: "above",
+          threshold: 55,
+          hysteresis: { mode: "manual", clearThreshold: 38 },
+        }),
+        durationSeconds: 600,
+        webhookJson: JSON.stringify({ url: "https://example.invalid/legacy", method: "POST" }),
+        resolvedWebhookJson: null,
+        enabled: true,
+      })
+      .run();
+
+    const latch = store.listLatches().find((l) => l.id === "legacy-rule");
+    expect(latch?.webhook).toEqual({ kind: "custom", url: "https://example.invalid/legacy", method: "POST" });
   });
 });
