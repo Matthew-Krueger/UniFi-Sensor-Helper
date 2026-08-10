@@ -42,13 +42,14 @@ endpoints in use and how each was confirmed against a live console.
      -days 365 -subj "/CN=localhost"
    ```
    Point `TLS_CERT_PATH`/`TLS_KEY_PATH` in `.env` at these files.
-4. Run the dev server:
+4. Run the dev server from the repo root:
    ```bash
-   cd apps/web
-   bun run server.ts
+   bun run dev
    ```
    Visit `https://localhost:8443` (your browser will warn about the
-   self-signed cert — that's expected for local dev).
+   self-signed cert — that's expected for local dev). `.env`,
+   `data/app.db`, and `certs/` are all resolved relative to the repo
+   root — this only works run from the root, not from inside `apps/web`.
 5. Log in with the `ADMIN_USERNAME`/`ADMIN_PASSWORD` you set in `.env`.
    This account is seeded into the database on first boot only; manage
    further accounts from the Users area once built out.

@@ -31,7 +31,12 @@ async function main() {
   const engine = getEngine();
   await engine.boot();
 
-  const app = next({ dev });
+  // dir is explicit (not left to default to process.cwd()) so this file
+  // runs the same way whether invoked as `bun run apps/web/server.ts` from
+  // the repo root (the normal path — see package.json's dev/start scripts,
+  // and how .env/data/certs paths in .env.example are written relative to
+  // the repo root) or `bun run server.ts` from inside apps/web directly.
+  const app = next({ dev, dir: import.meta.dir });
   const handle = app.getRequestHandler();
   await app.prepare();
 
