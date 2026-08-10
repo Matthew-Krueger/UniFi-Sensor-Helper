@@ -2,7 +2,14 @@ import type { ConsoleStatus, EffectiveInterval, Metric, ProtectConsole, Reading,
 import { effectiveInterval } from "@unifi-sensor-latch/shared";
 import { AuthStore } from "./auth";
 import { ConfigStore } from "./config";
-import { checkConnection, fetchRawSensors, rawSensorToSensor, subscribeDevices, type DeviceSubscription } from "./protect";
+import {
+  checkConnection,
+  fetchRawSensors,
+  rawSensorToReadings,
+  rawSensorToSensor,
+  subscribeDevices,
+  type DeviceSubscription,
+} from "./protect";
 import { dispatchWebhook } from "./webhookDispatcher";
 import { applyReading, initialState } from "./stateMachine";
 
@@ -103,8 +110,18 @@ export class LatchEngine {
   }
 
   // Discovery-driven sensor list (SPEC.md section 12) — never hand-typed.
+  //
+  // GET /v1/sensors returns each sensor's *current* readings, not just
+  // metadata — ingest() those immediately rather than only upserting
+  // name/metrics and waiting on a spontaneous websocket delta to first
+  // populate SensorStatus. Battery sensors can go a long time between
+  // unprompted reports (see API_NOTES.md), so without this, the Sensors
+  // page and any rule watching that sensor would show "no data yet" for
+  // however long it took the sensor to next report on its own — even
+  // though the console already told us the value the moment we asked.
   async discoverSensors(consoleConfig: ProtectConsole): Promise<void> {
     const raw = await fetchRawSensors(consoleConfig);
+    const now = Date.now();
     for (const r of raw) {
       const sensor = rawSensorToSensor(r);
       // expectedIntervalSeconds: null here is only the *insert* default
@@ -112,6 +129,10 @@ export class LatchEngine {
       // overwrites it on conflict, so a previously-set override survives
       // repeated discovery runs.
       this.config.upsertSensor({ ...sensor, consoleId: consoleConfig.id, expectedIntervalSeconds: null });
+
+      for (const reading of rawSensorToReadings(r.id, r, now)) {
+        this.ingest(reading);
+      }
     }
     const sensorCount = this.config.listSensors().filter((s) => s.consoleId === consoleConfig.id).length;
     this.setConsoleStatus(consoleConfig.id, { sensorCount });

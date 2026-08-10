@@ -23,13 +23,26 @@ import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 const ASSIGNABLE_ROLES: Role[] = ["user", "admin", "superadmin"];
 
 function GeneratedPasswordBanner({ username, password, onDismiss }: { username: string; password: string; onDismiss: () => void }) {
+  const [copied, setCopied] = React.useState(false);
+
+  async function copy() {
+    await navigator.clipboard.writeText(password);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
   return (
     <div className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
       <p>
         Generated password for <strong>{username}</strong> — shown once, not recoverable after you leave this page.
         Relay it out-of-band; they'll be forced to set a new one on first login.
       </p>
-      <code className="w-fit rounded bg-background px-2 py-1 font-mono text-base">{password}</code>
+      <div className="flex items-center gap-2">
+        <code className="w-fit rounded bg-background px-2 py-1 font-mono text-base">{password}</code>
+        <Button variant="outline" size="sm" onClick={copy}>
+          {copied ? "Copied!" : "Copy"}
+        </Button>
+      </div>
       <Button variant="outline" size="sm" className="w-fit" onClick={onDismiss}>
         I've saved it — dismiss
       </Button>
@@ -246,11 +259,21 @@ export default function UsersPage() {
                   <TableCell className="flex gap-1">
                     {u.id !== actor?.id && (actor?.role === "superadmin" || u.role === "user") && (
                       <>
-                        <Button variant="ghost" size="sm" onClick={() => invalidatePassword(u)}>
-                          Invalidate
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => invalidatePassword(u)}
+                          title="Their current password keeps working to sign in, but they're forced to set a new one immediately after — nothing changes until their next login."
+                        >
+                          Force Reset on Next Login
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => resetPassword(u)}>
-                          Reset
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => resetPassword(u)}
+                          title="Generates a brand new password right now — their old one stops working immediately."
+                        >
+                          Generate New Password
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => deleteUser(u.id)}>
                           Remove
