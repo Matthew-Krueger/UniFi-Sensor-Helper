@@ -144,11 +144,9 @@ Latch {
   id: string
   sensorId: string
   metric: Metric
-  direction: "above" | "below"   // which side of the threshold is "bad"
-  armThreshold: number            // crossing this (in `direction`) starts the timer
-  clearThreshold: number          // crossing back past this cancels/resolves
-                                   // (defaults to armThreshold if omitted —
-                                   // most latches, e.g. lux, don't need hysteresis)
+  condition: RuleCondition        // see "Rule conditions" below — replaces
+                                   // the old flat direction/armThreshold/
+                                   // clearThreshold triplet
   durationSeconds: number         // how long armed before firing — see
                                    // "Rule duration validation" below;
                                    // constrained to a fixed preset list in
@@ -171,19 +169,44 @@ Latch {
 }
 
 LatchState = "idle" | "armed" | "fired"
+
+// Rule conditions — see docs/superpowers/specs/2026-08-10-rule-conditions-
+// design.md for the full design rationale. Stored as one JSON column
+// (condition_json), mirroring how webhook/resolvedWebhook are already
+// stored, rather than a pile of columns that are null for whichever mode
+// isn't in use.
+RuleCondition =
+  | { type: "above"; threshold: number; hysteresis: ManualHysteresis }
+  | { type: "below"; threshold: number; hysteresis: ManualHysteresis }
+  | { type: "between"; low: number; high: number; hysteresis: RangeHysteresis }
+
+ManualHysteresis = { mode: "manual"; clearThreshold: number }
+
+RangeHysteresis =
+  | { mode: "manual"; clearLow: number; clearHigh: number }
+  | { mode: "auto"; marginPercent: number }
+    // marginPercent expands the [low, high] range outward on both sides
+    // by that percent of the range's width — always well-defined since a
+    // range always has positive width. Auto hysteresis is `between`-only:
+    // percent-of-threshold is undefined at threshold 0 and inconsistent
+    // in sign near zero, and a freezer alert crossing 0°C is exactly the
+    // scenario this app exists for — above/below stay manual-only.
 ```
 
 Worked examples (see section 6 for the actual config file shape):
 
-- **Front lux sensor**: `direction: "above"`, `armThreshold: 500`,
-  `clearThreshold: 500` (no hysteresis needed), `durationSeconds: 300`.
-  Light on briefly (someone walks by with a flashlight) never arms it for
-  long enough to fire. Sustained light for 5 minutes — door propped open —
-  fires.
-- **Walk-in freezer temp**: `direction: "above"`, `armThreshold: 55`,
-  `clearThreshold: 38`, `durationSeconds: 600`. Door open for a delivery
-  spikes it briefly; as long as it's back to 38 within 10 minutes, nothing
-  fires. A failing compressor that never recovers does fire.
+- **Front lux sensor**: `{ type: "above", threshold: 500, hysteresis: { mode: "manual", clearThreshold: 500 } }`
+  (no hysteresis margin needed), `durationSeconds: 300`. Light on briefly
+  (someone walks by with a flashlight) never arms it for long enough to
+  fire. Sustained light for 5 minutes — door propped open — fires.
+- **Walk-in freezer temp, one-sided**: `{ type: "above", threshold: 55, hysteresis: { mode: "manual", clearThreshold: 38 } }`,
+  `durationSeconds: 600`. Door open for a delivery spikes it briefly; as
+  long as it's back to 38 within 10 minutes, nothing fires. A failing
+  compressor that never recovers does fire.
+- **Walk-in freezer temp, range**: `{ type: "between", low: 40, high: 55, hysteresis: { mode: "auto", marginPercent: 5 } }`,
+  `durationSeconds: 3600`. Alerts on the actual food-safety danger band
+  rather than a single crossing point; a brief excursion during a
+  delivery that recovers within the hour never fires.
 
 ### 4a. Rule duration validation
 
