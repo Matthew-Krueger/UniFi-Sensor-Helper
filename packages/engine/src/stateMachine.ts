@@ -1,4 +1,5 @@
 import type { Latch, LatchState, LatchStateRecord, Reading } from "@unifi-sensor-latch/shared";
+import { isConditionMet, isConditionRecovered } from "@unifi-sensor-latch/shared";
 
 // The correctness-critical piece per CLAUDE.md — a missed alert has real
 // consequences. This module is pure: no I/O, no network, no clock access
@@ -14,14 +15,6 @@ export type Transition =
   | { type: "resolved" }
   | { type: "none" };
 
-function isBad(latch: Latch, value: number): boolean {
-  return latch.direction === "above" ? value > latch.armThreshold : value < latch.armThreshold;
-}
-
-function isRecovered(latch: Latch, value: number): boolean {
-  return latch.direction === "above" ? value <= latch.clearThreshold : value >= latch.clearThreshold;
-}
-
 // Applies one reading to one latch's current state record. Returns the next
 // state record and which transition (if any) occurred, so the caller can
 // decide whether to dispatch a webhook.
@@ -34,7 +27,7 @@ export function applyReading(
 
   switch (current.state) {
     case "idle": {
-      if (isBad(latch, value)) {
+      if (isConditionMet(latch.condition, value)) {
         return {
           next: { ...current, state: "armed", armedAt: timestamp, updatedAt: timestamp },
           transition: { type: "armed" },
@@ -44,7 +37,7 @@ export function applyReading(
     }
 
     case "armed": {
-      if (isRecovered(latch, value)) {
+      if (isConditionRecovered(latch.condition, value)) {
         return {
           next: { ...current, state: "idle", armedAt: null, updatedAt: timestamp },
           transition: { type: "cleared-before-fire" },
@@ -63,7 +56,7 @@ export function applyReading(
     }
 
     case "fired": {
-      if (isRecovered(latch, value)) {
+      if (isConditionRecovered(latch.condition, value)) {
         return {
           next: { ...current, state: "idle", armedAt: null, firedAt: null, updatedAt: timestamp },
           transition: { type: "resolved" },
