@@ -22,11 +22,22 @@ interface NavDrawerProps {
 
 const DESKTOP_QUERY = "(min-width: 768px)"; // matches Tailwind's md: breakpoint
 
+// useLayoutEffect (not useEffect) so isDesktop is resolved synchronously
+// before the browser paints, not after — with a plain useEffect, the
+// drawer briefly mounted as "closed" (nothing on screen), then flipped
+// open a tick later, which meant the slide-in entrance animation played
+// on every load even though desktop is supposed to be permanently
+// pinned, no animation, ever. Falls back to useEffect on the server
+// (useLayoutEffect warns if it runs there) — harmless, since this file is
+// "use client" and only actually executes client-side anyway.
+const useIsomorphicLayoutEffect = typeof window !== "undefined" ? React.useLayoutEffect : React.useEffect;
+
 // Drawer-based nav (matches Unifi's own app navigation pattern, per
 // project preference over a horizontal tab bar) — the hamburger trigger
 // and slide-in drawer are the nav on mobile; on desktop the drawer is
 // pinned permanently open as a real sidebar — no close button, no
-// hamburger to toggle it, can't be dismissed. (An earlier version left it
+// hamburger to toggle it, can't be dismissed, no entrance/exit animation
+// (see the `animated` prop below). (An earlier version left it
 // closeable-but-defaulted-open on desktop; pinned is simpler and was the
 // preferred choice.)
 export function NavDrawer({ links, username, role }: NavDrawerProps) {
@@ -34,7 +45,7 @@ export function NavDrawer({ links, username, role }: NavDrawerProps) {
   const [isDesktop, setIsDesktop] = React.useState(false);
   const pathname = usePathname();
 
-  React.useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     const mql = window.matchMedia(DESKTOP_QUERY);
     setIsDesktop(mql.matches);
     const onChange = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
@@ -60,6 +71,7 @@ export function NavDrawer({ links, username, role }: NavDrawerProps) {
             </SheetTrigger>
             <SheetContent
               hideCloseOnDesktop
+              animated={!isDesktop}
               onInteractOutside={(e) => {
                 if (isDesktop) e.preventDefault();
               }}

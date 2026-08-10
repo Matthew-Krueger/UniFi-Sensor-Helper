@@ -39,17 +39,26 @@ interface SheetContentProps extends React.ComponentPropsWithoutRef<typeof Dialog
   // affordance there, since it isn't meant to be closeable at that
   // breakpoint. md:hidden on the button itself, matching the overlay.
   hideCloseOnDesktop?: boolean;
+  // Skip the slide-in/out transition entirely. Passed false for the
+  // desktop-pinned sidebar case — otherwise it plays its entrance
+  // animation the moment it first mounts (a CSS animation triggers on
+  // any element that mounts already matching an `animate-in` selector,
+  // not just on an open/closed *transition*), which looked like the
+  // whole nav "freaking out" for a moment on every page load. True by
+  // default — mobile's actual open/close drawer keeps its animation.
+  animated?: boolean;
 }
 
 const SheetContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Content>, SheetContentProps>(
-  ({ className, children, hideCloseOnDesktop, ...props }, ref) => (
+  ({ className, children, hideCloseOnDesktop, animated = true, ...props }, ref) => (
     <SheetPortal>
       <SheetOverlay />
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
           "fixed inset-y-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col gap-4 border-r border-border bg-background p-6 shadow-lg",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left data-[state=closed]:duration-200 data-[state=open]:duration-300",
+          animated &&
+            "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left data-[state=closed]:duration-200 data-[state=open]:duration-300",
           className
         )}
         {...props}

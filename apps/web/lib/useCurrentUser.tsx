@@ -13,17 +13,22 @@ export function hasRole(user: User | null, minimum: Role): boolean {
   return !!user && ROLE_RANK[user.role] >= ROLE_RANK[minimum];
 }
 
-// Polls every few seconds rather than fetching once on mount — this is
-// what makes account deletion/role changes feel close to instant instead
-// of only taking effect on the next full navigation. The server already
-// invalidates a deleted account's session on its very next request
-// (getSessionUser looks the user up by id on every call, no server-side
-// session cache to go stale) — this is just what makes the client notice
-// promptly. See SessionGuard for the "force sign-out" reaction to a
-// session that goes from valid to null.
+interface CurrentUserState {
+  user: User | null;
+  loading: boolean;
+}
+
+// Single shared poll for the whole app — every page/component that needs
+// the session (role-gating buttons, SessionGuard's kickout logic, etc.)
+// reads from this one context instead of each running its own 5s
+// setInterval against /api/auth. Before this, SessionGuard *and* whatever
+// page you were on each polled independently, doubling every /api/auth
+// request (visible as back-to-back GET /api/auth pairs in the server log).
+const CurrentUserContext = React.createContext<CurrentUserState | null>(null);
+
 const POLL_MS = 5000;
 
-export function useCurrentUser() {
+export function CurrentUserProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = React.useState<User | null>(null);
   const [loading, setLoading] = React.useState(true);
 
@@ -49,5 +54,14 @@ export function useCurrentUser() {
     };
   }, []);
 
-  return { user, loading };
+  const value = React.useMemo(() => ({ user, loading }), [user, loading]);
+  return <CurrentUserContext.Provider value={value}>{children}</CurrentUserContext.Provider>;
+}
+
+export function useCurrentUser(): CurrentUserState {
+  const ctx = React.useContext(CurrentUserContext);
+  if (!ctx) {
+    throw new Error("useCurrentUser must be used within a CurrentUserProvider (see app/layout.tsx)");
+  }
+  return ctx;
 }

@@ -54,6 +54,7 @@ export default function SensorsPage() {
   const [consoles, setConsoles] = React.useState<ProtectConsole[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [lastRefreshedAt, setLastRefreshedAt] = React.useState<number | null>(null);
 
   const load = React.useCallback(async () => {
     const [sensorsRes, consolesRes] = await Promise.all([fetch("/api/sensors"), fetch("/api/consoles")]);
@@ -98,6 +99,11 @@ export default function SensorsPage() {
   // list + live status/values), same data the 5s poll would eventually
   // bring in, just immediately. It only reads and writes sensor metadata
   // — it never touches latch_state or evaluates any rule.
+  //
+  // lastRefreshedAt exists so a successful refresh is visible even when
+  // nothing actually changed (same sensors, same values) — otherwise a
+  // no-op-looking success is indistinguishable from the button silently
+  // doing nothing.
   async function refresh() {
     setLoading(true);
     setError(null);
@@ -107,8 +113,11 @@ export default function SensorsPage() {
       if (!res.ok) throw new Error(body.error ?? "discovery failed");
       if (body.errors?.length) setError(body.errors.join("; "));
       await load();
+      setLastRefreshedAt(Date.now());
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[sensors] refresh failed:", err);
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -119,9 +128,20 @@ export default function SensorsPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Sensors</h1>
         {canDiscover && (
-          <Button variant="outline" size="sm" onClick={refresh} disabled={loading || consoles.length === 0}>
-            {loading ? "Refreshing…" : "Refresh"}
-          </Button>
+          <div className="flex items-center gap-2">
+            {lastRefreshedAt && !loading && (
+              <span className="text-xs text-muted-foreground">Refreshed {agoLabel(lastRefreshedAt)}</span>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={refresh}
+              disabled={loading || consoles.length === 0}
+              title={consoles.length === 0 ? "Add a console first" : undefined}
+            >
+              {loading ? "Refreshing…" : "Refresh"}
+            </Button>
+          </div>
         )}
       </div>
 
