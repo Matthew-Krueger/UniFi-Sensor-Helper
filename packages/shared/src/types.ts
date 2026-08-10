@@ -1,3 +1,5 @@
+import type { RuleCondition } from "./condition";
+
 // Domain model — SPEC.md section 4. Exact Metric enum finalized during API
 // discovery (SPEC.md section 8); this is a starting point, not final.
 export type Metric = "lux" | "temperature" | "humidity" | "leak";
@@ -27,8 +29,6 @@ export interface ProtectConsole {
   createdAt: number;
 }
 
-export type Direction = "above" | "below";
-
 export interface WebhookTarget {
   url: string;
   method: "GET" | "POST";
@@ -40,9 +40,7 @@ export interface Latch {
   id: string;
   sensorId: string;
   metric: Metric;
-  direction: Direction;
-  armThreshold: number;
-  clearThreshold: number; // defaults to armThreshold if omitted at creation time
+  condition: RuleCondition;
   durationSeconds: number;
   webhook: WebhookTarget;
   resolvedWebhook?: WebhookTarget;
