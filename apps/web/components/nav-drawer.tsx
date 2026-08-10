@@ -60,7 +60,12 @@ export function NavDrawer({ links, username, role }: NavDrawerProps) {
   const open = isDesktop || mobileOpen;
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-lg dark:bg-background/70">
+    // md:hidden — on desktop the sidebar is permanently pinned open (see
+    // SheetContent below) and already shows the app name plus everything
+    // else this bar would hold (the hamburger trigger is mobile-only to
+    // begin with); keeping the bar around on desktop just left a mostly-
+    // empty strip across the top of the page above the sidebar.
+    <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-lg dark:bg-background/70 md:hidden">
       <div className="flex items-center justify-between px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3">
           {/* modal={false} on desktop is the actual fix for "can't click
@@ -90,7 +95,7 @@ export function NavDrawer({ links, username, role }: NavDrawerProps) {
                 if (isDesktop) e.preventDefault();
               }}
             >
-              <SheetTitle>UnifiSensorLatch</SheetTitle>
+              <SheetTitle>UniFi Sensor Helper</SheetTitle>
               <nav className="flex flex-col gap-1">
                 {links.map((link) => {
                   const active = pathname === link.href;
@@ -123,7 +128,7 @@ export function NavDrawer({ links, username, role }: NavDrawerProps) {
               </div>
             </SheetContent>
           </Sheet>
-          <span className="font-semibold">UnifiSensorLatch</span>
+          <span className="font-semibold">UniFi Sensor Helper</span>
         </div>
       </div>
     </header>

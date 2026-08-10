@@ -226,13 +226,30 @@ resolved in this priority order (`packages/shared/src/interval.ts`):
    observed data yet. (A per-sensor override tier used to sit between
    these two; removed — see the Sensor domain type above for why.)
 
-The Rules page's duration field is a fixed preset dropdown — 30s / 1m /
-5m / 10m / 15m / 30m / 1h, matching Protect's own Alarm Manager duration
-options rather than a free-number field — and greys out any preset
-shorter than the effective interval before the request is even sent, so
-the 400 is a backstop (CLAUDE.md trust boundaries — client-side is a
-convenience, the server-side check is the actual gate) rather than the
-first time the operator hears about it.
+The Rules page's duration field offers Unifi's own preset list (30s / 1m
+/ 5m / 10m / 15m / 30m / 1h) or an arbitrary custom DD:HH:MM:SS duration
+(`apps/web/lib/format.ts`'s `formatDuration` renders it back
+consistently) — either way, the effective-interval floor above applies
+identically, and too-short presets/custom totals are flagged client-side
+before the request is even sent, so the 400 is a backstop (CLAUDE.md
+trust boundaries — client-side is a convenience, the server-side check is
+the actual gate) rather than the first time the operator hears about it.
+
+**Known limitation — false positives from underestimated intervals.**
+The "observed" interval (§4a's priority 1) is a rolling average of *past*
+reading gaps; it's a reasonable estimate of a sensor's real cadence, not
+a guarantee. A battery sensor can occasionally take noticeably longer
+between reports than its own recent average — low battery, RF
+interference, a firmware-side backoff — and the very first time that
+happens after a rule is created, the observed average hasn't caught up
+yet. If a rule's duration is set right at (or just above) the effective
+interval, an unlucky single delayed reading can make it look like the
+armed condition persisted for the full window when it didn't really —
+i.e. a false positive. There's no code-side fix for this (the engine
+can't know a sensor's *true* worst-case interval in advance, only its
+recent history) — if a rule fires spuriously, the operator remedy is to
+increase that rule's `durationSeconds` to add margin above the observed/
+default interval, not to treat it as a bug in the arm/clear logic itself.
 
 ## 5. Architecture
 

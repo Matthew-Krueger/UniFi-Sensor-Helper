@@ -1,4 +1,4 @@
-# UnifiSensorLatch
+# UniFi Sensor Helper
 
 A hysteresis "latch" layer between UniFi Protect sensor readings and
 outbound webhooks. Protect's Alarm Manager fires the instant a threshold is

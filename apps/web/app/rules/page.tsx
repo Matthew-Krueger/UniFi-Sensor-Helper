@@ -829,6 +829,11 @@ export default function RulesPage() {
                   {form.durationMode === "preset" ? "are disabled above" : "will be rejected"}.
                 </p>
               )}
+              <p className="text-xs text-muted-foreground">
+                Note: this is an observed average, not a guarantee — an occasional slower-than-usual reading can
+                still make a rule fire spuriously if its duration sits right at that floor. If a rule fires
+                without a real sustained cause, increase its duration rather than treating it as a bug.
+              </p>
             </div>
 
             <WebhookFieldsEditor

@@ -6,7 +6,7 @@ import { CurrentUserProvider } from "@/lib/useCurrentUser";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "UnifiSensorLatch",
+  title: "UniFi Sensor Helper",
   description: "Hysteresis latch layer between UniFi Protect sensors and webhooks",
 };
 

@@ -49,7 +49,7 @@ Mac dev build vs. Debian deploy build differ only in what's targeted:
 
 ```ini
 [Unit]
-Description=UnifiSensorLatch
+Description=UniFi Sensor Helper
 After=docker.service
 Requires=docker.service
 
