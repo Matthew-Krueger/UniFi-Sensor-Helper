@@ -25,3 +25,4 @@ next-env.d.ts
 # Reference material dropped in for debugging (large vendor API dumps) —
 # not project source, not meant to be tracked.
 /Unifi API Specs/
+docker-compose.override.yml
