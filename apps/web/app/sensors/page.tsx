@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Droplets, Sun, Thermometer, TriangleAlert, Gauge } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -58,10 +59,15 @@ function reportingBadge(
   return { variant: "fired", label: "overdue" };
 }
 
-function formatValue(metric: string, value: number): string {
+// Sensor values are always stored/evaluated in Celsius (SPEC.md) — unit is
+// a display-only conversion, applied here only, driven by the signed-in
+// user's saved preference (see temperature-unit-toggle.tsx).
+function formatValue(metric: string, value: number, temperatureUnit: "C" | "F"): string {
   switch (metric) {
-    case "temperature":
+    case "temperature": {
+      if (temperatureUnit === "F") return `${((value * 9) / 5 + 32).toFixed(1)}°F`;
       return `${value.toFixed(1)}°C`;
+    }
     case "humidity":
       return `${value.toFixed(0)}%`;
     case "lux":
@@ -73,9 +79,22 @@ function formatValue(metric: string, value: number): string {
   }
 }
 
+const METRIC_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  temperature: Thermometer,
+  humidity: Droplets,
+  lux: Sun,
+  leak: TriangleAlert,
+};
+
+function MetricIcon({ metric }: { metric: string }) {
+  const Icon = METRIC_ICONS[metric] ?? Gauge;
+  return <Icon className="h-4 w-4 text-purple-600 dark:text-purple-400" />;
+}
+
 export default function SensorsPage() {
   useNowTick(); // keeps "last contacted"/"refreshed" ticking live, second-by-second
   const { user: actor } = useCurrentUser();
+  const temperatureUnit = actor?.temperatureUnit ?? "C";
   const canDiscover = hasRole(actor, "admin");
   const [sensors, setSensors] = React.useState<Sensor[]>([]);
   const [statuses, setStatuses] = React.useState<SensorStatus[]>([]);
@@ -210,7 +229,10 @@ export default function SensorsPage() {
             const badge = reportingBadge(status?.lastEventAt ?? null, observedSeconds, console_.defaultIntervalSeconds);
 
             return (
-              <Card key={console_.id}>
+              <Card
+                key={console_.id}
+                className="border-purple-100 bg-gradient-to-b from-purple-50 to-card shadow-lg shadow-purple-950/5 dark:border-purple-950/60 dark:from-purple-950/30 dark:to-card dark:shadow-purple-950/40"
+              >
                 <CardHeader>
                   <div className="flex items-center justify-between gap-2">
                     <CardTitle>{console_.name}</CardTitle>
@@ -226,18 +248,21 @@ export default function SensorsPage() {
                     {consoleSensors.map((sensor) => {
                       const sensorStatus = statuses.find((s) => s.sensorId === sensor.id);
                       return (
-                        <div key={sensor.id} className="rounded-md border border-border p-3">
-                          <p className="mb-2 text-sm font-medium">{sensor.name}</p>
+                        <div
+                          key={sensor.id}
+                          className="flex flex-col items-center gap-2 rounded-lg border border-purple-100 bg-purple-50/60 p-3 text-center shadow-sm shadow-purple-950/5 dark:border-purple-900/60 dark:bg-purple-950/20 dark:shadow-purple-950/30"
+                        >
+                          <p className="text-sm font-medium">{sensor.name}</p>
                           {sensor.metrics.length === 0 ? (
                             <span className="text-xs text-muted-foreground">No metrics enabled</span>
                           ) : (
-                            <div className="flex flex-wrap gap-1">
+                            <div className="flex flex-wrap justify-center gap-1">
                               {sensor.metrics.map((m) => {
                                 const value = sensorStatus?.values[m];
                                 return (
-                                  <Badge key={m} variant="outline">
-                                    {m}
-                                    {value != null ? `: ${formatValue(m, value)}` : ""}
+                                  <Badge key={m} variant="outline" className="gap-1">
+                                    <MetricIcon metric={m} />
+                                    {value != null ? formatValue(m, value, temperatureUnit) : m}
                                   </Badge>
                                 );
                               })}

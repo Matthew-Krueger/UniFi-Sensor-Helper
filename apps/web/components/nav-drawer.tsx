@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { TemperatureUnitToggle } from "@/components/temperature-unit-toggle";
 import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { SignOutButton } from "@/components/sign-out-button";
 
@@ -120,7 +121,10 @@ export function NavDrawer({ links, username, role }: NavDrawerProps) {
           </Sheet>
           <span className="font-semibold">UnifiSensorLatch</span>
         </div>
-        <ThemeToggle />
+        <div className="flex items-center gap-1">
+          <TemperatureUnitToggle />
+          <ThemeToggle />
+        </div>
       </div>
     </header>
   );

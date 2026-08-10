@@ -51,6 +51,10 @@ export const users = sqliteTable("users", {
   // password change. False for the self-service bootstrap account, which
   // chose its own password.
   mustResetPassword: integer("must_reset_password", { mode: "boolean" }).notNull().default(false),
+  // Per-user display preference only — never affects storage or the
+  // engine (metric values are always stored/evaluated in Celsius; this is
+  // a UI-layer conversion at render time).
+  temperatureUnit: text("temperature_unit").notNull().default("C"), // "C" | "F"
   createdAt: integer("created_at").notNull(),
 });
 

@@ -47,6 +47,7 @@ function toUser(row: typeof schema.users.$inferSelect): User {
     username: row.username,
     role: row.role as Role,
     mustResetPassword: row.mustResetPassword,
+    temperatureUnit: row.temperatureUnit as "C" | "F",
     createdAt: row.createdAt,
   };
 }
@@ -87,7 +88,7 @@ export class AuthStore {
       .values({ id, username, passwordHash, role: effectiveRole, mustResetPassword: false, createdAt })
       .run();
     console.log(`[auth] created user "${username}" as ${effectiveRole} (password ${maskSecret(password)})`);
-    return { id, username, role: effectiveRole, mustResetPassword: false, createdAt };
+    return { id, username, role: effectiveRole, mustResetPassword: false, temperatureUnit: "C", createdAt };
   }
 
   // Admin-created accounts: the admin never types a password for someone
@@ -101,7 +102,16 @@ export class AuthStore {
     const createdAt = Date.now();
     this.db.insert(users).values({ id, username, passwordHash, role, mustResetPassword: true, createdAt }).run();
     console.log(`[auth] created user "${username}" as ${role} with a generated password (reset required)`);
-    return { user: { id, username, role, mustResetPassword: true, createdAt }, password };
+    return { user: { id, username, role, mustResetPassword: true, temperatureUnit: "C", createdAt }, password };
+  }
+
+  // Self-service display preference — not gated by role, every account
+  // sets its own. Purely a UI concern (see the field's comment in
+  // shared/types.ts), so no validation beyond the string union at the
+  // type/route layer.
+  setTemperatureUnit(userId: string, unit: "C" | "F"): User | null {
+    this.db.update(users).set({ temperatureUnit: unit }).where(eq(users.id, userId)).run();
+    return this.getUser(userId);
   }
 
   removeUser(id: string): void {

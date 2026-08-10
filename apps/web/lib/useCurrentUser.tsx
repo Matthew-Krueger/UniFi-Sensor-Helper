@@ -16,6 +16,10 @@ export function hasRole(user: User | null, minimum: Role): boolean {
 interface CurrentUserState {
   user: User | null;
   loading: boolean;
+  // Lets a component that just changed its own account (e.g. the
+  // temperature-unit toggle) reflect that immediately instead of waiting
+  // up to POLL_MS for the next background poll to catch up.
+  setUser: (user: User | null) => void;
 }
 
 // Single shared poll for the whole app — every page/component that needs
@@ -54,7 +58,7 @@ export function CurrentUserProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
-  const value = React.useMemo(() => ({ user, loading }), [user, loading]);
+  const value = React.useMemo(() => ({ user, loading, setUser }), [user, loading]);
   return <CurrentUserContext.Provider value={value}>{children}</CurrentUserContext.Provider>;
 }
 

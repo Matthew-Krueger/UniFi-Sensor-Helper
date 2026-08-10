@@ -36,6 +36,13 @@
       "when": 1786348140827,
       "tag": "0004_warm_tana_nile",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786348942953,
+      "tag": "0005_dry_calypso",
+      "breakpoints": true
     }
   ]
 }

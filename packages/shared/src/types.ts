@@ -124,6 +124,10 @@ export interface User {
   // invalidated or reset. Blocks everything except changing your own
   // password until cleared by a successful self-service password change.
   mustResetPassword: boolean;
+  // Display-only preference (Celsius storage/evaluation is unaffected) —
+  // see CLAUDE.md config-vs-secrets: this is user-editable UI state, so it
+  // lives on the account row rather than anywhere else.
+  temperatureUnit: "C" | "F";
   createdAt: number;
 }
 
