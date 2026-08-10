@@ -101,9 +101,12 @@ function enabledMetrics(raw: RawSensor): Metric[] {
   return metrics;
 }
 
-// consoleId is intentionally omitted — the caller (singleton.ts) knows
-// which console this sensor came from; this function is console-agnostic.
-export function rawSensorToSensor(raw: RawSensor): Omit<Sensor, "consoleId"> {
+// consoleId/expectedIntervalSeconds are intentionally omitted — the
+// caller (singleton.ts) knows which console this came from, and
+// ConfigStore.upsertSensor preserves any existing interval override
+// rather than letting rediscovery reset it; this function is
+// console-agnostic and interval-agnostic.
+export function rawSensorToSensor(raw: RawSensor): Omit<Sensor, "consoleId" | "expectedIntervalSeconds"> {
   return { id: raw.id, name: raw.name ?? raw.id, metrics: enabledMetrics(raw) };
 }
 

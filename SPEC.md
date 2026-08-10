@@ -112,10 +112,31 @@ Sensor {
   id: string            // Protect device id
   name: string           // friendly name, editable in UI
   metrics: Metric[]      // discovered from the API, see section 8
+  expectedIntervalSeconds: number | null
+    // Manual fallback for how often this sensor is expected to report —
+    // null means "use the owning console's default." Only used until the
+    // engine has observed enough real readings to measure the actual
+    // interval itself (see SensorStatus below); observed data always
+    // wins once available. See "Rule duration validation" below.
 }
 
 Metric = "lux" | "temperature" | "humidity" | "leak" | ...
   // exact enum finalized during API discovery (section 8)
+
+ProtectConsole {
+  ...
+  defaultIntervalSeconds: number   // default 300 (5 min) — see Sensor above
+}
+
+SensorStatus {                     // in-memory, not persisted
+  sensorId: string
+  lastSeenAt: number | null
+  values: Partial<Record<Metric, number>>
+  observedIntervalSeconds: Partial<Record<Metric, number>>
+    // Rolling average (EMA) of real gaps between successive readings of
+    // each metric — ground truth, not configuration. Takes priority over
+    // Sensor.expectedIntervalSeconds and ProtectConsole.defaultIntervalSeconds.
+}
 
 Latch {
   id: string
@@ -126,7 +147,11 @@ Latch {
   clearThreshold: number          // crossing back past this cancels/resolves
                                    // (defaults to armThreshold if omitted —
                                    // most latches, e.g. lux, don't need hysteresis)
-  durationSeconds: number         // how long armed before firing
+  durationSeconds: number         // how long armed before firing — see
+                                   // "Rule duration validation" below;
+                                   // constrained to a fixed preset list in
+                                   // the UI (30s/1m/5m/10m/15m/30m/1h,
+                                   // matching Protect's own Alarm Manager)
   webhook: {
     url: string
     method: "GET" | "POST"
@@ -157,6 +182,33 @@ Worked examples (see section 6 for the actual config file shape):
   `clearThreshold: 38`, `durationSeconds: 600`. Door open for a delivery
   spikes it briefly; as long as it's back to 38 within 10 minutes, nothing
   fires. A failing compressor that never recovers does fire.
+
+### 4a. Rule duration validation
+
+A rule armed for less time than its sensor actually takes to report a new
+reading can never reliably fire — the armed window could close before a
+single non-recovering sample arrives. This is a **hard block**, not a
+warning: `POST /api/latches` and `PATCH /api/latches/{id}` (when duration/
+sensor/metric change) reject the request with a 400 if
+`durationSeconds` is less than the sensor's *effective interval*,
+resolved in this priority order (`packages/shared/src/interval.ts`):
+
+1. **Observed** — a rolling average measured from real reading gaps
+   (`SensorStatus.observedIntervalSeconds`). Ground truth once available;
+   always wins.
+2. **Sensor override** — `Sensor.expectedIntervalSeconds`, set on the
+   Sensors page. Manual fallback for a sensor with no observed data yet
+   (just discovered) or a known interval an operator wants to force.
+3. **Console default** — `ProtectConsole.defaultIntervalSeconds` (300s
+   default), set on the Consoles page. Last resort.
+
+The Rules page's duration field is a fixed preset dropdown — 30s / 1m /
+5m / 10m / 15m / 30m / 1h, matching Protect's own Alarm Manager duration
+options rather than a free-number field — and greys out any preset
+shorter than the effective interval before the request is even sent, so
+the 400 is a backstop (CLAUDE.md trust boundaries — client-side is a
+convenience, the server-side check is the actual gate) rather than the
+first time the operator hears about it.
 
 ## 5. Architecture
 

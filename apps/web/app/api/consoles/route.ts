@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { consoleApiKeySchema, consoleHostSchema, consoleNameSchema, maskSecret } from "@unifi-sensor-latch/shared";
+import {
+  consoleApiKeySchema,
+  consoleHostSchema,
+  consoleNameSchema,
+  intervalSecondsSchema,
+  maskSecret,
+} from "@unifi-sensor-latch/shared";
 import type { ProtectConsole } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
+
+const DEFAULT_INTERVAL_SECONDS = 300; // 5 minutes — matches schema.ts's column default
 
 // Protect console connections (host + API key) — user-editable in SQLite,
 // not .env, since a site can have more than one console (see schema.ts).
@@ -33,9 +41,23 @@ export async function POST(req: NextRequest) {
   const apiKey = consoleApiKeySchema.safeParse(body.apiKey);
   if (!apiKey.success) return NextResponse.json({ error: apiKey.error.issues[0]?.message }, { status: 400 });
 
+  let defaultIntervalSeconds = DEFAULT_INTERVAL_SECONDS;
+  if (body.defaultIntervalSeconds != null) {
+    const interval = intervalSecondsSchema.safeParse(body.defaultIntervalSeconds);
+    if (!interval.success) return NextResponse.json({ error: interval.error.issues[0]?.message }, { status: 400 });
+    defaultIntervalSeconds = interval.data;
+  }
+
   const engine = getEngine();
   const id: string = typeof body.id === "string" && body.id ? body.id : crypto.randomUUID();
-  const console_: ProtectConsole = { id, name: name.data, host: host.data, apiKey: apiKey.data, createdAt: Date.now() };
+  const console_: ProtectConsole = {
+    id,
+    name: name.data,
+    host: host.data,
+    apiKey: apiKey.data,
+    defaultIntervalSeconds,
+    createdAt: Date.now(),
+  };
 
   engine.config.upsertProtectConsole(console_);
 

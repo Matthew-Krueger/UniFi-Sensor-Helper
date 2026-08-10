@@ -7,6 +7,11 @@ export interface Sensor {
   consoleId: string; // which ProtectConsole this sensor was discovered on
   name: string; // friendly name, editable in UI
   metrics: Metric[]; // discovered from the API
+  // Manual fallback for how often we expect this sensor to report, used
+  // only until we've observed enough real readings to measure it (see
+  // SensorStatus.observedIntervalSeconds) — null means "use the console
+  // default." See packages/shared/src/interval.ts.
+  expectedIntervalSeconds: number | null;
 }
 
 // A UniFi Protect console this deployment talks to. Stored in SQLite, not
@@ -20,6 +25,10 @@ export interface ProtectConsole {
   name: string; // friendly label, e.g. "Main site NVR"
   host: string; // LAN IP or hostname
   apiKey: string;
+  // Default expected reporting interval (seconds) for sensors on this
+  // console with no per-sensor override and no observed data yet. See
+  // packages/shared/src/interval.ts.
+  defaultIntervalSeconds: number;
   createdAt: number;
 }
 
@@ -93,6 +102,13 @@ export interface SensorStatus {
   sensorId: string;
   lastSeenAt: number | null;
   values: Partial<Record<Metric, number>>;
+  // Rolling-average gap (seconds) between successive readings of each
+  // metric, measured from real timestamps — not configuration, ground
+  // truth. Present once we've seen ≥2 readings for that metric. See
+  // singleton.ts's ingest() for how it's computed and interval.ts for how
+  // it's used (takes priority over Sensor.expectedIntervalSeconds and the
+  // console default).
+  observedIntervalSeconds: Partial<Record<Metric, number>>;
 }
 
 // Three-tier role model (SPEC.md section 3):

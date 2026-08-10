@@ -11,6 +11,15 @@ export const sensors = sqliteTable("sensors", {
   consoleId: text("console_id").notNull(),
   name: text("name").notNull(),
   discoveredMetrics: text("discovered_metrics").notNull().default("[]"), // JSON array of Metric
+  // Per-sensor override of how often we expect this sensor to actually
+  // report — null means "use the owning console's default." Compared
+  // against a Rule's durationSeconds at creation time (see
+  // packages/shared/src/interval.ts); the *observed* interval (measured
+  // from real reading gaps, see SensorStatus) takes priority over this
+  // when we have enough samples — this is only the fallback for a sensor
+  // we haven't seen enough readings from yet, or one whose real interval
+  // an operator knows in advance.
+  expectedIntervalSeconds: integer("expected_interval_seconds"),
 });
 
 export const latches = sqliteTable("latches", {
@@ -62,5 +71,9 @@ export const protectConsoles = sqliteTable("protect_consoles", {
   name: text("name").notNull(),
   host: text("host").notNull(),
   apiKey: text("api_key").notNull(),
+  // Default expected reporting interval (seconds) for sensors on this
+  // console that don't have their own override and haven't reported
+  // enough readings yet for an observed interval — see sensors.
+  defaultIntervalSeconds: integer("default_interval_seconds").notNull().default(300),
   createdAt: integer("created_at").notNull(),
 });

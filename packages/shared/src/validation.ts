@@ -33,6 +33,16 @@ export const consoleNameSchema = z.string().min(1).max(100, "Name must be 100 ch
 export const consoleHostSchema = z.string().min(1).max(255, "Host must be 255 characters or fewer");
 export const consoleApiKeySchema = z.string().min(1).max(512, "API key must be 512 characters or fewer");
 
+// Expected-interval fields (console default, per-sensor override) — 10s
+// floor rules out an accidentally-entered value that'd make every rule
+// duration look invalid, 24h ceiling is generous enough for any real
+// battery sensor while still bounding the input.
+export const intervalSecondsSchema = z
+  .number()
+  .int()
+  .min(10, "Interval must be at least 10 seconds")
+  .max(86400, "Interval must be 24 hours or less");
+
 export interface ValidationResult {
   valid: boolean;
   error?: string;

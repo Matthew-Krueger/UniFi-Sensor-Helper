@@ -6,7 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { ConsoleStatus, ProtectConsole } from "@unifi-sensor-latch/shared";
+import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
+
+// Reuses the same Unifi-matched preset list Rules use for durations —
+// "how often do we expect a sensor to report" and "how long must a rule
+// stay armed" are the same kind of duration, so one dropdown vocabulary
+// for both. 5 minutes is the column default (schema.ts).
+const INTERVAL_PRESETS = DURATION_PRESETS;
 
 // Protect console connections — never in .env, since a site can have more
 // than one (see packages/engine/src/schema.ts). The API key field is
@@ -75,6 +82,7 @@ export default function ConsolesPage() {
   const [name, setName] = React.useState("");
   const [host, setHost] = React.useState("");
   const [apiKey, setApiKey] = React.useState("");
+  const [defaultIntervalSeconds, setDefaultIntervalSeconds] = React.useState(300);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [savingMessage, setSavingMessage] = React.useState<string | null>(null);
@@ -105,7 +113,7 @@ export default function ConsolesPage() {
       const res = await fetch("/api/consoles", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, host, apiKey }),
+        body: JSON.stringify({ name, host, apiKey, defaultIntervalSeconds }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "failed to save console");
@@ -123,6 +131,15 @@ export default function ConsolesPage() {
 
   async function removeConsole(id: string) {
     await fetch(`/api/consoles/${id}`, { method: "DELETE" });
+    await load();
+  }
+
+  async function updateDefaultInterval(id: string, seconds: number) {
+    await fetch(`/api/consoles/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ defaultIntervalSeconds: seconds }),
+    });
     await load();
   }
 
@@ -167,6 +184,24 @@ export default function ConsolesPage() {
                   <div>API key: <span className="font-mono">{c.apiKey}</span></div>
                   <div>{status?.sensorCount ?? 0} sensor{status?.sensorCount === 1 ? "" : "s"} discovered</div>
                   <div>Last contacted: {agoLabel(status?.lastEventAt ?? null)}</div>
+                  <div className="flex items-center gap-2">
+                    <span>Default expected interval:</span>
+                    {canManage ? (
+                      <select
+                        className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+                        value={c.defaultIntervalSeconds}
+                        onChange={(e) => updateDefaultInterval(c.id, Number(e.target.value))}
+                      >
+                        {INTERVAL_PRESETS.map((p) => (
+                          <option key={p.seconds} value={p.seconds}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span>{INTERVAL_PRESETS.find((p) => p.seconds === c.defaultIntervalSeconds)?.label ?? `${c.defaultIntervalSeconds}s`}</span>
+                    )}
+                  </div>
                   {status?.applicationVersion && <div>Firmware: {status.applicationVersion}</div>}
                   {status?.latencyMs != null && <div>API latency: {status.latencyMs}ms</div>}
                   {status?.error && <div className="text-red-600 dark:text-red-400">{status.error}</div>}
@@ -192,7 +227,7 @@ export default function ConsolesPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <form className="grid gap-3 sm:grid-cols-4 sm:items-end" onSubmit={addConsole}>
+            <form className="grid gap-3 sm:grid-cols-5 sm:items-end" onSubmit={addConsole}>
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-muted-foreground">Name</label>
                 <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Main site NVR" required />
@@ -210,6 +245,20 @@ export default function ConsolesPage() {
                   placeholder="generated at unifi.ui.com"
                   required
                 />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-muted-foreground">Default expected interval</label>
+                <select
+                  className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                  value={defaultIntervalSeconds}
+                  onChange={(e) => setDefaultIntervalSeconds(Number(e.target.value))}
+                >
+                  {INTERVAL_PRESETS.map((p) => (
+                    <option key={p.seconds} value={p.seconds}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
               </div>
               <Button type="submit" disabled={saving}>
                 {saving ? "Adding…" : "Add console"}

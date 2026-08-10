@@ -5,12 +5,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ProtectConsole, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
+import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 
 // Discovery-driven — SPEC.md section 12: sensors are never hand-typed, only
 // ever listed from what /api/sensors/discover found on a configured
 // console. If no console is configured yet, this page points to Consoles.
 const POLL_MS = 5000;
+const INTERVAL_PRESETS = DURATION_PRESETS;
 
 function agoLabel(timestamp: number | null): string {
   if (!timestamp) return "never";
@@ -18,6 +20,14 @@ function agoLabel(timestamp: number | null): string {
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
   return `${Math.round(seconds / 3600)}h ago`;
+}
+
+function formatInterval(seconds: number): string {
+  const preset = INTERVAL_PRESETS.find((p) => p.seconds === seconds);
+  if (preset) return preset.label;
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds / 3600)}h`;
 }
 
 function formatValue(metric: string, value: number): string {
@@ -59,6 +69,15 @@ export default function SensorsPage() {
     const id = setInterval(load, POLL_MS);
     return () => clearInterval(id);
   }, [load]);
+
+  async function setExpectedInterval(sensorId: string, seconds: number | null) {
+    await fetch(`/api/sensors/${sensorId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedIntervalSeconds: seconds }),
+    });
+    await load();
+  }
 
   async function refresh() {
     setLoading(true);
@@ -124,16 +143,43 @@ export default function SensorsPage() {
                   {sensor.metrics.length === 0 ? (
                     <span className="text-sm text-muted-foreground">No metrics enabled on this device</span>
                   ) : (
-                    <div className="flex flex-wrap gap-1">
+                    <div className="flex flex-col gap-1">
                       {sensor.metrics.map((m) => {
                         const value = status?.values[m];
+                        const observed = status?.observedIntervalSeconds[m];
                         return (
-                          <Badge key={m} variant="outline">
-                            {m}
-                            {value != null ? `: ${formatValue(m, value)}` : ""}
-                          </Badge>
+                          <div key={m} className="flex flex-wrap items-center gap-1">
+                            <Badge variant="outline">
+                              {m}
+                              {value != null ? `: ${formatValue(m, value)}` : ""}
+                            </Badge>
+                            {observed != null && (
+                              <span className="text-xs text-muted-foreground">
+                                reporting every ~{formatInterval(observed)}
+                              </span>
+                            )}
+                          </div>
                         );
                       })}
+                    </div>
+                  )}
+                  {canDiscover && (
+                    <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>Expected interval override:</span>
+                      <select
+                        className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+                        value={sensor.expectedIntervalSeconds ?? ""}
+                        onChange={(e) =>
+                          setExpectedInterval(sensor.id, e.target.value === "" ? null : Number(e.target.value))
+                        }
+                      >
+                        <option value="">Use console default</option>
+                        {INTERVAL_PRESETS.map((p) => (
+                          <option key={p.seconds} value={p.seconds}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   )}
                 </CardContent>

@@ -1,4 +1,5 @@
-import type { ConsoleStatus, ProtectConsole, Reading, SensorStatus } from "@unifi-sensor-latch/shared";
+import type { ConsoleStatus, EffectiveInterval, Metric, ProtectConsole, Reading, SensorStatus } from "@unifi-sensor-latch/shared";
+import { effectiveInterval } from "@unifi-sensor-latch/shared";
 import { AuthStore } from "./auth";
 import { ConfigStore } from "./config";
 import { checkConnection, fetchRawSensors, rawSensorToSensor, subscribeDevices, type DeviceSubscription } from "./protect";
@@ -19,6 +20,10 @@ export class LatchEngine {
   // types) — this is "is it alive right now", not a persisted history.
   private consoleStatuses = new Map<string, ConsoleStatus>();
   private sensorStatuses = new Map<string, SensorStatus>();
+  // Raw per-(sensorId, metric) reading timestamps, used only to compute
+  // the rolling-average observedIntervalSeconds exposed on SensorStatus —
+  // not exposed itself. Keyed by "${sensorId}:${metric}".
+  private lastReadingAt = new Map<string, number>();
 
   async boot(): Promise<void> {
     if (this.auth.count() === 0) {
@@ -102,7 +107,11 @@ export class LatchEngine {
     const raw = await fetchRawSensors(consoleConfig);
     for (const r of raw) {
       const sensor = rawSensorToSensor(r);
-      this.config.upsertSensor({ ...sensor, consoleId: consoleConfig.id });
+      // expectedIntervalSeconds: null here is only the *insert* default
+      // for a brand-new sensor row — upsertSensor deliberately never
+      // overwrites it on conflict, so a previously-set override survives
+      // repeated discovery runs.
+      this.config.upsertSensor({ ...sensor, consoleId: consoleConfig.id, expectedIntervalSeconds: null });
     }
     const sensorCount = this.config.listSensors().filter((s) => s.consoleId === consoleConfig.id).length;
     this.setConsoleStatus(consoleConfig.id, { sensorCount });
@@ -146,6 +155,21 @@ export class LatchEngine {
     return [...this.sensorStatuses.values()];
   }
 
+  // Resolves observed → sensor override → console default for a given
+  // (sensorId, metric) — the one place Rule duration validation (POST/
+  // PATCH /api/latches) and the Rules page's duration-preset greying
+  // both go for "what interval should this duration be checked against."
+  // Returns null only if the sensor or its owning console can't be found.
+  getEffectiveInterval(sensorId: string, metric: Metric): EffectiveInterval | null {
+    const sensor = this.config.listSensors().find((s) => s.id === sensorId);
+    if (!sensor) return null;
+    const console_ = this.config.getProtectConsole(sensor.consoleId);
+    if (!console_) return null;
+
+    const observed = this.sensorStatuses.get(sensorId)?.observedIntervalSeconds[metric];
+    return effectiveInterval(observed, sensor.expectedIntervalSeconds, console_.defaultIntervalSeconds);
+  }
+
   // Ingest entrypoint — called for every reading, whether from a live
   // websocket push or (in tests) directly. Updates sensor/console status
   // (see above) for *every* reading, regardless of whether a latch exists
@@ -157,10 +181,26 @@ export class LatchEngine {
     const sensor = this.config.listSensors().find((s) => s.id === reading.sensorId);
 
     const currentSensorStatus = this.sensorStatuses.get(reading.sensorId);
+    const historyKey = `${reading.sensorId}:${reading.metric}`;
+    const previousAt = this.lastReadingAt.get(historyKey);
+    this.lastReadingAt.set(historyKey, reading.timestamp);
+
+    let observedIntervalSeconds = currentSensorStatus?.observedIntervalSeconds ?? {};
+    if (previousAt != null) {
+      const gapSeconds = (reading.timestamp - previousAt) / 1000;
+      // Exponential moving average (alpha=0.3) rather than a plain mean —
+      // adapts to a real change in reporting cadence without one-shot
+      // network jitter swinging the estimate wildly.
+      const priorEstimate = observedIntervalSeconds[reading.metric];
+      const nextEstimate = priorEstimate == null ? gapSeconds : priorEstimate * 0.7 + gapSeconds * 0.3;
+      observedIntervalSeconds = { ...observedIntervalSeconds, [reading.metric]: Math.round(nextEstimate) };
+    }
+
     this.sensorStatuses.set(reading.sensorId, {
       sensorId: reading.sensorId,
       lastSeenAt: reading.timestamp,
       values: { ...currentSensorStatus?.values, [reading.metric]: reading.value },
+      observedIntervalSeconds,
     });
     if (sensor) {
       this.setConsoleStatus(sensor.consoleId, { lastEventAt: reading.timestamp });

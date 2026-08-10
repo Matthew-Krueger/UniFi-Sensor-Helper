@@ -7,7 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { Latch, Sensor } from "@unifi-sensor-latch/shared";
+import type { Latch, ProtectConsole, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
+import { DURATION_PRESETS, effectiveInterval, isDurationValid } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 
 // CRUD over /api/latches — "Rule" is the user-facing name for what the
@@ -30,7 +31,7 @@ const emptyForm = {
   direction: "above" as Latch["direction"],
   armThreshold: "",
   clearThreshold: "",
-  durationSeconds: "",
+  durationSeconds: "" as number | "",
   webhookUrl: "",
   webhookMethod: "POST" as Latch["webhook"]["method"],
   resolvedWebhookUrl: "",
@@ -41,15 +42,26 @@ export default function RulesPage() {
   const canEdit = hasRole(actor, "admin");
   const [rules, setRules] = React.useState<MaskedLatch[]>([]);
   const [sensors, setSensors] = React.useState<Sensor[]>([]);
+  const [sensorStatuses, setSensorStatuses] = React.useState<SensorStatus[]>([]);
+  const [consoles, setConsoles] = React.useState<ProtectConsole[]>([]);
   const [open, setOpen] = React.useState(false);
   const [form, setForm] = React.useState(emptyForm);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
   const load = React.useCallback(async () => {
-    const [rulesRes, sensorsRes] = await Promise.all([fetch("/api/latches"), fetch("/api/sensors")]);
+    const [rulesRes, sensorsRes, consolesRes] = await Promise.all([
+      fetch("/api/latches"),
+      fetch("/api/sensors"),
+      fetch("/api/consoles"),
+    ]);
     if (rulesRes.ok) setRules((await rulesRes.json()).latches);
-    if (sensorsRes.ok) setSensors((await sensorsRes.json()).sensors);
+    if (sensorsRes.ok) {
+      const body = await sensorsRes.json();
+      setSensors(body.sensors);
+      setSensorStatuses(body.statuses);
+    }
+    if (consolesRes.ok) setConsoles((await consolesRes.json()).consoles);
   }, []);
 
   React.useEffect(() => {
@@ -62,6 +74,21 @@ export default function RulesPage() {
     return sensors.find((s) => s.id === id)?.name ?? id;
   }
 
+  // Same priority as the server-side check (see /api/latches's route) —
+  // observed interval (real measured gap) beats the sensor's manual
+  // override, which beats the owning console's default. Used only to
+  // grey out too-short duration presets before submit; the server-side
+  // check in /api/latches is the actual gate (CLAUDE.md trust boundaries).
+  const selectedInterval = React.useMemo(() => {
+    if (!selectedSensor || !form.metric) return null;
+    const console_ = consoles.find((c) => c.id === selectedSensor.consoleId);
+    if (!console_) return null;
+    const observed = sensorStatuses.find((s) => s.sensorId === selectedSensor.id)?.observedIntervalSeconds[
+      form.metric
+    ];
+    return effectiveInterval(observed, selectedSensor.expectedIntervalSeconds, console_.defaultIntervalSeconds);
+  }, [selectedSensor, form.metric, consoles, sensorStatuses]);
+
   async function createRule(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -69,10 +96,12 @@ export default function RulesPage() {
     try {
       const armThreshold = Number(form.armThreshold);
       const clearThreshold = form.clearThreshold ? Number(form.clearThreshold) : armThreshold;
-      const durationSeconds = Number(form.durationSeconds);
       if (!form.sensorId || !form.metric) throw new Error("sensor and metric are required");
-      if (!Number.isFinite(armThreshold) || !Number.isFinite(durationSeconds)) {
-        throw new Error("thresholds and duration must be numbers");
+      if (form.durationSeconds === "") throw new Error("duration is required");
+      const durationSeconds = form.durationSeconds;
+      if (!Number.isFinite(armThreshold)) throw new Error("thresholds must be numbers");
+      if (selectedInterval && !isDurationValid(durationSeconds, selectedInterval)) {
+        throw new Error("selected duration is too short for this sensor's reporting interval");
       }
 
       const rule: Latch = {
@@ -143,7 +172,7 @@ export default function RulesPage() {
                   <select
                     className="h-9 rounded-md border border-border bg-background px-3 text-sm"
                     value={form.sensorId}
-                    onChange={(e) => setForm({ ...form, sensorId: e.target.value, metric: "" })}
+                    onChange={(e) => setForm({ ...form, sensorId: e.target.value, metric: "", durationSeconds: "" })}
                     required
                   >
                     <option value="" disabled>
@@ -162,7 +191,9 @@ export default function RulesPage() {
                   <select
                     className="h-9 rounded-md border border-border bg-background px-3 text-sm"
                     value={form.metric}
-                    onChange={(e) => setForm({ ...form, metric: e.target.value as Sensor["metrics"][number] })}
+                    onChange={(e) =>
+                      setForm({ ...form, metric: e.target.value as Sensor["metrics"][number], durationSeconds: "" })
+                    }
                     disabled={!selectedSensor}
                     required
                   >
@@ -189,14 +220,36 @@ export default function RulesPage() {
                       <option value="below">below</option>
                     </select>
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">Duration (seconds)</label>
-                    <Input
-                      type="number"
+                  <div className="col-span-2 flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground">
+                      Duration (armed for at least this long before firing)
+                    </label>
+                    <select
+                      className="h-9 rounded-md border border-border bg-background px-3 text-sm"
                       value={form.durationSeconds}
-                      onChange={(e) => setForm({ ...form, durationSeconds: e.target.value })}
+                      onChange={(e) => setForm({ ...form, durationSeconds: Number(e.target.value) })}
                       required
-                    />
+                    >
+                      <option value="" disabled>
+                        Select a duration
+                      </option>
+                      {DURATION_PRESETS.map((p) => {
+                        const tooShort = selectedInterval ? p.seconds < selectedInterval.seconds : false;
+                        return (
+                          <option key={p.seconds} value={p.seconds} disabled={tooShort}>
+                            {p.label}
+                            {tooShort ? " (too short for this sensor)" : ""}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {selectedInterval && (
+                      <p className="text-xs text-muted-foreground">
+                        This sensor's effective reporting interval is ~{selectedInterval.seconds}s (
+                        {selectedInterval.source.replace("-", " ")}) — durations shorter than that are disabled
+                        above.
+                      </p>
+                    )}
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-muted-foreground">Arm threshold</label>

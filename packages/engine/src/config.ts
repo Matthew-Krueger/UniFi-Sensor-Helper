@@ -10,11 +10,24 @@ import { latches, latchState, protectConsoles, sensors } from "./schema";
 // layer originally described in SPEC.md section 6.
 
 function sensorFromRow(row: typeof schema.sensors.$inferSelect): Sensor {
-  return { id: row.id, consoleId: row.consoleId, name: row.name, metrics: JSON.parse(row.discoveredMetrics) };
+  return {
+    id: row.id,
+    consoleId: row.consoleId,
+    name: row.name,
+    metrics: JSON.parse(row.discoveredMetrics),
+    expectedIntervalSeconds: row.expectedIntervalSeconds,
+  };
 }
 
 function consoleFromRow(row: typeof schema.protectConsoles.$inferSelect): ProtectConsole {
-  return { id: row.id, name: row.name, host: row.host, apiKey: row.apiKey, createdAt: row.createdAt };
+  return {
+    id: row.id,
+    name: row.name,
+    host: row.host,
+    apiKey: row.apiKey,
+    defaultIntervalSeconds: row.defaultIntervalSeconds,
+    createdAt: row.createdAt,
+  };
 }
 
 function latchFromRow(row: typeof schema.latches.$inferSelect): Latch {
@@ -49,6 +62,10 @@ export class ConfigStore {
     return this.db.select().from(sensors).orderBy(sensors.name).all().map(sensorFromRow);
   }
 
+  // Discovery's write path — deliberately does NOT overwrite
+  // expectedIntervalSeconds on conflict, so re-running discovery never
+  // clobbers an admin-set per-sensor interval override. Use
+  // setSensorExpectedInterval to change that field.
   upsertSensor(sensor: Sensor): void {
     this.db
       .insert(sensors)
@@ -57,12 +74,17 @@ export class ConfigStore {
         consoleId: sensor.consoleId,
         name: sensor.name,
         discoveredMetrics: JSON.stringify(sensor.metrics),
+        expectedIntervalSeconds: sensor.expectedIntervalSeconds,
       })
       .onConflictDoUpdate({
         target: sensors.id,
         set: { consoleId: sensor.consoleId, name: sensor.name, discoveredMetrics: JSON.stringify(sensor.metrics) },
       })
       .run();
+  }
+
+  setSensorExpectedInterval(sensorId: string, seconds: number | null): void {
+    this.db.update(sensors).set({ expectedIntervalSeconds: seconds }).where(eq(sensors.id, sensorId)).run();
   }
 
   listProtectConsoles(): ProtectConsole[] {
@@ -82,13 +104,23 @@ export class ConfigStore {
         name: console.name,
         host: console.host,
         apiKey: console.apiKey,
+        defaultIntervalSeconds: console.defaultIntervalSeconds,
         createdAt: console.createdAt,
       })
       .onConflictDoUpdate({
         target: protectConsoles.id,
-        set: { name: console.name, host: console.host, apiKey: console.apiKey },
+        set: {
+          name: console.name,
+          host: console.host,
+          apiKey: console.apiKey,
+          defaultIntervalSeconds: console.defaultIntervalSeconds,
+        },
       })
       .run();
+  }
+
+  setConsoleDefaultInterval(consoleId: string, seconds: number): void {
+    this.db.update(protectConsoles).set({ defaultIntervalSeconds: seconds }).where(eq(protectConsoles.id, consoleId)).run();
   }
 
   deleteProtectConsole(id: string): void {
