@@ -1,0 +1,30 @@
+# Without this file, `COPY . .` in the Dockerfile's build stage pulls in
+# the host machine's own node_modules (built for the host's OS/arch) and
+# overwrites the node_modules the deps stage just installed *inside* the
+# container — silently breaking reproducibility and defeating the whole
+# point of a multi-stage build. Confirmed live: this caused "Cannot find
+# package 'next'" at container startup because the host's top-level
+# node_modules only has 3 hoisted packages (most of the tree lives under
+# apps/web/node_modules on this machine's particular hoisting layout).
+node_modules
+**/node_modules
+.next
+**/.next
+
+# Never send secrets/private data into the build context.
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-journal
+*.db-wal
+certs/
+*.pem
+*.key
+*.crt
+
+.git
+.gitignore
+Unifi API Specs/
+docs/
