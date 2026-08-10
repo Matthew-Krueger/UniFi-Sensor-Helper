@@ -1,0 +1,1 @@
+ALTER TABLE `latches` ADD `condition_json` text;

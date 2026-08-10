@@ -39,9 +39,7 @@ describe("ConfigStore latch state persistence", () => {
       id: "freezer-temp",
       sensorId: "sensor-1",
       metric: "temperature",
-      direction: "above",
-      armThreshold: 55,
-      clearThreshold: 38,
+      condition: { type: "above", threshold: 55, hysteresis: { mode: "manual", clearThreshold: 38 } },
       durationSeconds: 600,
       webhook: { url: "https://example.invalid/webhook", method: "POST" },
       enabled: true,
@@ -49,6 +47,8 @@ describe("ConfigStore latch state persistence", () => {
 
     expect(store.listSensors()).toHaveLength(1);
     expect(store.listLatches()).toHaveLength(1);
-    expect(store.listLatches()[0]?.clearThreshold).toBe(38);
+    const condition = store.listLatches()[0]?.condition;
+    expect(condition?.type).toBe("above");
+    expect(condition?.type === "above" && condition.hysteresis.clearThreshold).toBe(38);
   });
 });

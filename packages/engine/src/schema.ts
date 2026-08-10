@@ -17,9 +17,7 @@ export const latches = sqliteTable("latches", {
   id: text("id").primaryKey(),
   sensorId: text("sensor_id").notNull(),
   metric: text("metric").notNull(),
-  direction: text("direction").notNull(), // "above" | "below"
-  armThreshold: real("arm_threshold").notNull(),
-  clearThreshold: real("clear_threshold").notNull(),
+  conditionJson: text("condition_json").notNull(), // RuleCondition JSON — see shared/src/condition.ts
   durationSeconds: integer("duration_seconds").notNull(),
   webhookJson: text("webhook_json").notNull(),
   resolvedWebhookJson: text("resolved_webhook_json"),
