@@ -422,18 +422,22 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   // nudge for the zone just above that floor. A duration of exactly 1x the
   // interval only guarantees one more reading arrives before firing; a
   // single delayed/flaky sample right at that edge is enough to trip it
-  // (see the false-positive note below). 2x guarantees at least two
-  // independent confirming readings — a real debounce, not just "didn't
-  // clear before the next poll." Not enforced as a floor: a short duration
-  // can be a deliberate, informed choice on a sensor known to be reliable,
-  // and CLAUDE.md's correctness priority cuts both ways — this app can't
-  // silently trade "no false positives" for "misses were slower to fire."
+  // (see the false-positive note below). 2x still isn't a reliable margin —
+  // it assumes the physical sensor itself reports to Protect on a cadence
+  // that lines up with our poll, but a sensor that misses its own check-in
+  // once can blow straight through a 2x window with zero confirming
+  // readings. 3x gives enough slack that a single missed sensor check-in
+  // doesn't collapse the debounce to one sample. Not enforced as a floor: a
+  // short duration can be a deliberate, informed choice on a sensor known
+  // to be reliable, and CLAUDE.md's correctness priority cuts both ways —
+  // this app can't silently trade "no false positives" for "misses were
+  // slower to fire."
   const weakDebounce =
     selectedInterval != null &&
     !customDurationTooShort &&
     (() => {
       const seconds = getDurationSeconds(form);
-      return seconds != null && seconds < selectedInterval.seconds * 2;
+      return seconds != null && seconds < selectedInterval.seconds * 3;
     })();
 
   // Fields are typed in the user's display unit (e.g. Fahrenheit) — convert
@@ -892,9 +896,10 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
               )}
               {weakDebounce && (
                 <p className="text-xs text-amber-600 dark:text-amber-400">
-                  This duration is only ~1x the reporting interval, so a single late or flaky reading can be enough
-                  to fire it. Consider at least 2x (~{selectedInterval!.seconds * 2}s) for a sturdier debounce — not
-                  required, just a stronger guarantee against a one-sample false positive.
+                  This duration is under 3x the reporting interval, so a single late or flaky reading — including a
+                  missed check-in from the sensor itself, not just our poll — can be enough to fire it. Consider at
+                  least 3x (~{selectedInterval!.seconds * 3}s) for a sturdier debounce — not required, just a
+                  stronger guarantee against a one-sample false positive.
                 </p>
               )}
               <p className="text-xs text-muted-foreground">
