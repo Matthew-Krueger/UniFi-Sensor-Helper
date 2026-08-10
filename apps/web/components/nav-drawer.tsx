@@ -62,7 +62,17 @@ export function NavDrawer({ links, username, role }: NavDrawerProps) {
     <header className="sticky top-0 z-40 border-b border-border bg-background">
       <div className="flex items-center justify-between px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3">
-          <Sheet open={open} onOpenChange={(next) => !isDesktop && setMobileOpen(next)}>
+          {/* modal={false} on desktop is the actual fix for "can't click
+              anything outside the sidebar" — Radix's Dialog is modal by
+              default, which disables pointer-events on the rest of the
+              page while open regardless of whether the overlay is
+              visually hidden (md:hidden only hides the *overlay*, it
+              doesn't touch Radix's modal pointer-event lockout). Since
+              the drawer is permanently open on desktop, that lockout was
+              permanent too. Mobile keeps modal={true} — a temporary
+              overlay drawer should still block the background while
+              it's open. */}
+          <Sheet open={open} onOpenChange={(next) => !isDesktop && setMobileOpen(next)} modal={!isDesktop}>
             <SheetTrigger asChild>
               <Button variant="ghost" size="sm" className="px-2 md:hidden">
                 <Menu className="h-5 w-5" />
