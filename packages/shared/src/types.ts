@@ -62,8 +62,29 @@ export interface Reading {
   timestamp: number;
 }
 
+// Three-tier role model (SPEC.md section 3):
+//   "user"       — read-only: dashboard/sensors/latches views, no writes.
+//   "admin"      — full operational access (sensors, latches, consoles,
+//                  webhooks) and can create "user"/"admin" accounts, but
+//                  cannot promote/demote anyone or create a superadmin.
+//   "superadmin" — everything admin can do, plus promoting/demoting any
+//                  account's role. The very first account ever created is
+//                  always superadmin.
+export type Role = "user" | "admin" | "superadmin";
+
 export interface User {
   id: string;
   username: string;
+  role: Role;
   createdAt: number;
+}
+
+// Whether `actor` is allowed to assign `targetRole` when creating or
+// promoting an account. Shared between the API routes (source of truth)
+// and the UI (so it can grey out options a role can't grant, rather than
+// only rejecting after a failed request).
+export function canAssignRole(actor: Role, targetRole: Role): boolean {
+  if (actor === "superadmin") return true;
+  if (actor === "admin") return targetRole !== "superadmin";
+  return false;
 }

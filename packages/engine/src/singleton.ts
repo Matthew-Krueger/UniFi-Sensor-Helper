@@ -17,7 +17,9 @@ export class LatchEngine {
   private subscriptions = new Map<string, DeviceSubscription>();
 
   async boot(): Promise<void> {
-    await this.auth.seedFromEnvIfEmpty();
+    if (this.auth.count() === 0) {
+      console.log("[auth] no accounts exist yet — sign-up is open until the first account is created");
+    }
 
     for (const console_ of this.config.listProtectConsoles()) {
       await this.connectConsole(console_);

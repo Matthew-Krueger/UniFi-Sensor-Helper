@@ -5,12 +5,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ProtectConsole, Sensor } from "@unifi-sensor-latch/shared";
+import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 
 // Discovery-driven — SPEC.md section 12: sensors are never hand-typed, only
 // ever listed from what /api/sensors/discover found on a configured
 // console. If no console is configured yet, this page points to Settings.
 
 export default function SensorsPage() {
+  const { user: actor } = useCurrentUser();
+  const canDiscover = hasRole(actor, "admin");
   const [sensors, setSensors] = React.useState<Sensor[]>([]);
   const [consoles, setConsoles] = React.useState<ProtectConsole[]>([]);
   const [loading, setLoading] = React.useState(false);
@@ -46,9 +49,11 @@ export default function SensorsPage() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Sensors</h1>
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading || consoles.length === 0}>
-          {loading ? "Refreshing…" : "Refresh"}
-        </Button>
+        {canDiscover && (
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading || consoles.length === 0}>
+            {loading ? "Refreshing…" : "Refresh"}
+          </Button>
+        )}
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}

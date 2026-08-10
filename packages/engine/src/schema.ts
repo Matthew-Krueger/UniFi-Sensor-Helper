@@ -34,10 +34,16 @@ export const latchState = sqliteTable("latch_state", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+// Three-tier role model (SPEC.md section 3): "user" is read-only, "admin"
+// has full operational access and can create user/admin accounts but not
+// promote anyone, "superadmin" can additionally promote/demote roles. The
+// very first account ever created is always superadmin (see AuthStore /
+// POST /api/users) — after that, account creation requires being logged in.
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  role: text("role").notNull().default("user"), // "user" | "admin" | "superadmin"
   createdAt: integer("created_at").notNull(),
 });
 

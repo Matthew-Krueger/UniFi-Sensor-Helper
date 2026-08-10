@@ -45,16 +45,49 @@ recovering" rule, and only then fires a webhook.
 
 ## 3. Non-goals
 
-- RBAC or permission tiers. Auth supports multiple operator accounts
-  (username + argon2-hashed password, stored in SQLite), but every account
-  has identical, full access — there are no roles. A single bootstrap
-  account is seeded from `ADMIN_USERNAME`/`ADMIN_PASSWORD` in `.env` (or the
-  container's env, under Docker) on first boot only; further accounts are
-  managed through the UI, not `.env`.
 - Historical time-series storage/graphing beyond a simple recent-events
   log (Protect already does this natively for raw sensor data).
 - Reimplementing Protect's own Alarm Manager UI. We only need to create
   the small number of Protect-side rules described in section 7.
+
+## 3a. Auth and roles
+
+*(Originally scoped as a non-goal here — "no roles, every account
+identical" — revised by project decision: a three-tier role model,
+described below, is in scope. Kept as its own section rather than folded
+silently back into "non-goals" so the reversal is visible, not just
+implied by the code.)*
+
+Three roles, username + argon2-hashed password stored in SQLite (`users`
+table, see `packages/engine/src/schema.ts`):
+
+- **`user`** — read-only. Can view the Dashboard, Sensors, and Latches
+  pages, but cannot create/edit/delete sensors, latches, consoles, or
+  webhooks, and cannot manage other accounts.
+- **`admin`** — full operational access: everything a `user` can view,
+  plus creating/editing/deleting sensors, latches, Protect consoles, and
+  webhook config. Can create new `user` or `admin` accounts. Cannot
+  promote/demote anyone's role, and cannot create a `superadmin` account.
+- **`superadmin`** — everything an `admin` can do, plus promoting or
+  demoting any account's role (including creating additional
+  superadmins). There is always at least one superadmin — the last
+  remaining superadmin cannot be demoted or deleted.
+
+Every account, regardless of role, can change its own password
+(`PATCH /api/account/password`, requires the current password).
+
+**No env-seeded bootstrap credential.** The first account is created
+through the app itself: account sign-up (`POST /api/users`) is open,
+without a session, **only** while the `users` table is empty — the check
+is explicit and unconditional (`AuthStore.count() === 0`), not inferred
+from any other state. That first account is always forced to
+`superadmin` regardless of what role is requested. The instant one
+account exists, the open door closes: every subsequent `POST /api/users`
+requires a logged-in `admin`-or-above session. This was a deliberate
+call, not an oversight — see CLAUDE.md's auth section for the reasoning
+(an admin present at first boot to create their own account is not
+considered a materially different risk than an env-seeded password they'd
+have to go set anyway).
 
 ## 4. Domain model
 
@@ -150,7 +183,7 @@ Next.js server process (long-running, NOT deployed serverless)
    |-- Route Handlers (app/api/**/route.ts)
    |     - Config CRUD (sensors, latches) — reads/writes the config file, backs the UI
    |     - Latch state — current state + recent history, polled by the dashboard
-   |     - Auth — session cookie against ADMIN_USERNAME/ADMIN_PASSWORD from .env
+   |     - Auth — session cookie backed by SQLite accounts + roles (section 3a)
    |     - Inbound webhook receiver — kept generic/available regardless of whether
    |       the chosen ingest strategy ends up being push-from-Protect or
    |       poll/subscribe-from-us (see section 8); Route Handlers call directly
@@ -244,9 +277,10 @@ and confidence level (confirmed by testing vs. inferred from docs).
 
 - HTTPS only, self-signed cert. Document the generation command used and
   where the cert/key live (outside version control).
-- One or more operator accounts (username + argon2-hashed password, see
-  section 3), session-based auth for the UI and its backing Route
-  Handlers. A bootstrap account is seeded from env vars on first boot.
+- One or more operator accounts (username + argon2-hashed password, three
+  roles — see section 3a), session-based auth for the UI and its backing
+  Route Handlers. The first account is created through the app itself
+  while the users table is empty, not seeded from env vars (section 3a).
 - Runs as a dedicated non-root system user with no other privileges. Under
   the Docker deploy model (section 10), this is the user that owns the
   systemd unit driving the container, not a user inside the container image

@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { getSessionUserId } from "@/lib/session";
+import { getSessionUser, hasRole } from "@/lib/auth";
 
-// TODO(SPEC.md section 8): discover sensors from the Protect API instead of
-// only reading back what's already stored. This stub only reflects the
-// config store's current contents.
+// Read-only reflection of what's already been discovered (see
+// /api/sensors/discover for the actual live-discovery call). Any
+// authenticated role, including read-only "user", can view this.
 export async function GET() {
-  if (!(await getSessionUserId())) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const actor = await getSessionUser();
+  if (!actor || !hasRole(actor, "user")) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const sensors = getEngine().config.listSensors();
   return NextResponse.json({ sensors });
 }

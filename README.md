@@ -31,9 +31,9 @@ endpoints in use and how each was confirmed against a live console.
    ```bash
    cp .env.example .env
    ```
-   At minimum set `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SESSION_SECRET`
-   (generate with `openssl rand -base64 48`). `.env` is gitignored — never
-   commit it.
+   At minimum set `SESSION_SECRET` (generate with `openssl rand -base64
+   48`). `.env` is gitignored — never commit it. There's no admin
+   credential to set here — see step 5.
 3. Generate a self-signed dev cert:
    ```bash
    mkdir -p certs
@@ -50,9 +50,11 @@ endpoints in use and how each was confirmed against a live console.
    self-signed cert — that's expected for local dev). `.env`,
    `data/app.db`, and `certs/` are all resolved relative to the repo
    root — this only works run from the root, not from inside `apps/web`.
-5. Log in with the `ADMIN_USERNAME`/`ADMIN_PASSWORD` you set in `.env`.
-   This account is seeded into the database on first boot only; manage
-   further accounts from the Users area once built out.
+5. Visit `/login` — with no accounts yet, it shows a **Create the first
+   account** form instead of a sign-in form. This is only available while
+   the users table is empty; the account you create here is always
+   `superadmin`. From then on, further accounts are created from the
+   Settings → Users page by a logged-in `admin` or `superadmin`.
 6. On the **Settings** page, add your Protect console: a friendly name,
    its LAN host/IP, and a local API key generated at unifi.ui.com. The
    engine connects immediately — no restart needed — and the API key is

@@ -1,5 +1,6 @@
 import { createServer as createHttpsServer } from "node:https";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import next from "next";
 import { getEngine } from "@unifi-sensor-latch/engine";
 
@@ -25,31 +26,40 @@ async function main() {
   if (globalThis.__serverBooted) return;
   globalThis.__serverBooted = true;
 
+  // The process starts with cwd = repo root (package.json's dev/start
+  // scripts run `bun run apps/web/server.ts` from there), which is what
+  // .env/DATABASE_PATH/TLS_*_PATH are written relative to. Resolve the TLS
+  // paths to absolute *before* the chdir below, so they still work once
+  // cwd changes. DATABASE_PATH doesn't need this — the engine reads it
+  // during boot(), below, while cwd is still the repo root.
+  const rootCwd = process.cwd();
+  const certPath = process.env.TLS_CERT_PATH;
+  const keyPath = process.env.TLS_KEY_PATH;
+  if (!certPath || !keyPath) {
+    throw new Error("TLS_CERT_PATH and TLS_KEY_PATH must be set — see DEPLOY.md for cert generation.");
+  }
+  const httpsOptions = {
+    cert: readFileSync(resolve(rootCwd, certPath)),
+    key: readFileSync(resolve(rootCwd, keyPath)),
+  };
+
   const dev = process.env.NODE_ENV !== "production";
   const port = Number(process.env.PORT ?? 8443);
 
   const engine = getEngine();
   await engine.boot();
 
-  // dir is explicit (not left to default to process.cwd()) so this file
-  // runs the same way whether invoked as `bun run apps/web/server.ts` from
-  // the repo root (the normal path — see package.json's dev/start scripts,
-  // and how .env/data/certs paths in .env.example are written relative to
-  // the repo root) or `bun run server.ts` from inside apps/web directly.
+  // Next.js (and, underneath it, Tailwind's content-glob resolution)
+  // resolves relative to process.cwd(), not the `dir` option below — so
+  // chdir into apps/web now that .env-relative and TLS paths are already
+  // resolved, restoring the cwd Next actually expects. Without this, the
+  // production build silently ships with no Tailwind-generated CSS (the
+  // bug this comment is here to prevent someone from reintroducing).
+  process.chdir(import.meta.dir);
+
   const app = next({ dev, dir: import.meta.dir });
   const handle = app.getRequestHandler();
   await app.prepare();
-
-  const certPath = process.env.TLS_CERT_PATH;
-  const keyPath = process.env.TLS_KEY_PATH;
-  if (!certPath || !keyPath) {
-    throw new Error("TLS_CERT_PATH and TLS_KEY_PATH must be set — see DEPLOY.md for cert generation.");
-  }
-
-  const httpsOptions = {
-    cert: readFileSync(certPath),
-    key: readFileSync(keyPath),
-  };
 
   createHttpsServer(httpsOptions, (req, res) => handle(req, res)).listen(port, () => {
     console.log(`[server] listening on https://localhost:${port}`);

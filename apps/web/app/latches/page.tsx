@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { Latch, Sensor } from "@unifi-sensor-latch/shared";
+import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 
 // CRUD over /api/latches. Sensor + metric picker only offers metrics a
 // discovered sensor actually exposes (SPEC.md section 12 — never hand-typed).
@@ -32,6 +33,8 @@ const emptyForm = {
 };
 
 export default function LatchesPage() {
+  const { user: actor } = useCurrentUser();
+  const canEdit = hasRole(actor, "admin");
   const [latches, setLatches] = React.useState<MaskedLatch[]>([]);
   const [sensors, setSensors] = React.useState<Sensor[]>([]);
   const [open, setOpen] = React.useState(false);
@@ -119,7 +122,8 @@ export default function LatchesPage() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Latches</h1>
-        <Dialog open={open} onOpenChange={setOpen}>
+        {canEdit && (
+          <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button size="sm" disabled={sensors.length === 0}>
               New Latch
@@ -236,7 +240,8 @@ export default function LatchesPage() {
               </Button>
             </form>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        )}
       </div>
 
       {sensors.length === 0 ? (
@@ -265,7 +270,7 @@ export default function LatchesPage() {
               <TableHead>Duration</TableHead>
               <TableHead>Webhook</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead />
+              {canEdit && <TableHead />}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -281,14 +286,16 @@ export default function LatchesPage() {
                 <TableCell>
                   <Badge variant={latch.enabled ? "outline" : "idle"}>{latch.enabled ? "enabled" : "disabled"}</Badge>
                 </TableCell>
-                <TableCell className="flex gap-1">
-                  <Button variant="ghost" size="sm" onClick={() => toggleEnabled(latch)}>
-                    {latch.enabled ? "Disable" : "Enable"}
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => deleteLatch(latch.id)}>
-                    Delete
-                  </Button>
-                </TableCell>
+                {canEdit && (
+                  <TableCell className="flex gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => toggleEnabled(latch)}>
+                      {latch.enabled ? "Disable" : "Enable"}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => deleteLatch(latch.id)}>
+                      Delete
+                    </Button>
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>

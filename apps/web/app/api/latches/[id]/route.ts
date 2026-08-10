@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
 import { maskSecret } from "@unifi-sensor-latch/shared";
 import type { Latch } from "@unifi-sensor-latch/shared";
-import { getSessionUserId } from "@/lib/session";
+import { getSessionUser, hasRole } from "@/lib/auth";
 
 function redactLatch(latch: Latch) {
   return {
@@ -15,7 +15,8 @@ function redactLatch(latch: Latch) {
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!(await getSessionUserId())) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const actor = await getSessionUser();
+  if (!actor || !hasRole(actor, "admin")) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const { id } = await params;
   const engine = getEngine();
@@ -29,7 +30,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!(await getSessionUserId())) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const actor = await getSessionUser();
+  if (!actor || !hasRole(actor, "admin")) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const { id } = await params;
   getEngine().config.deleteLatch(id);

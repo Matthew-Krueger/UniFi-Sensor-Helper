@@ -6,8 +6,6 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=8443
-      - ADMIN_USERNAME=${ADMIN_USERNAME}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - SESSION_SECRET=${SESSION_SECRET}
       - DATABASE_PATH=/repo/data/app.db
       - TLS_CERT_PATH=/repo/certs/cert.pem

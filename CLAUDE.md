@@ -155,9 +155,21 @@ nice-to-have:
 ## What not to do
 
 - Multi-user auth (multiple operator accounts, argon2-hashed passwords in
-  SQLite) is in scope per SPEC.md section 3 — but don't go further than
-  that. No roles/permission tiers, no RBAC, no user-facing profile fields
-  beyond username/password. Every account has identical access.
+  SQLite) is in scope, with a three-tier role model (`user` / `admin` /
+  `superadmin`) — see SPEC.md section 3a for the full spec. This reverses
+  an earlier "no roles" call; don't go further than the three tiers
+  described there (no additional per-feature permission flags, no
+  user-facing profile fields beyond username/password/role).
+- No env-seeded bootstrap admin credential (`ADMIN_USERNAME`/
+  `ADMIN_PASSWORD` in `.env` was the original design; it's gone). The
+  first account is created through the app's own sign-up endpoint while
+  the users table is empty — see SPEC.md section 3a. The one hard
+  requirement, non-negotiable: that endpoint must check
+  `AuthStore.count() === 0` explicitly and unconditionally before
+  allowing an unauthenticated account creation through. Never relax that
+  check to something inferred (a header, a query param, an env flag) —
+  it's the only thing standing between "open during first boot" and "open
+  forever."
 - Don't poll the Protect API faster than the sensor's own reporting
   interval "just in case" — it doesn't improve detection latency and
   it's unnecessary load. Confirm the interval before deciding on a
