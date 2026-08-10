@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import type { Latch, LatchStateRecord, Sensor } from "@unifi-sensor-latch/shared";
 import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
 import { conditionSummary } from "@unifi-sensor-latch/shared";
+import { metricUnitSuffix, toDisplayCondition } from "@/lib/units";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 
 // Client Component polling /api/state every few seconds — SPEC.md section 5:
 // latch state changes on the order of minutes, so polling is simpler than a
@@ -46,6 +48,8 @@ function useLiveState() {
 
 export default function DashboardPage() {
   useNowTick(); // keeps armed/fired "since" timing ticking live, second-by-second
+  const { user: actor } = useCurrentUser();
+  const temperatureUnit = actor?.temperatureUnit ?? "C";
   const { rules, sensors, states } = useLiveState();
   const sensorName = (id: string) => sensors.find((s) => s.id === id)?.name ?? id;
   const stateFor = (ruleId: string) => states.find((s) => s.latchId === ruleId);
@@ -83,7 +87,11 @@ export default function DashboardPage() {
                   <Badge variant={label as "idle" | "armed" | "fired"}>{label}</Badge>
                 </div>
                 <CardDescription title={sinceTimestamp ? absoluteTimeLabel(sinceTimestamp) : undefined}>
-                  {rule.metric} {conditionSummary(rule.condition)}
+                  {rule.metric}{" "}
+                  {conditionSummary(
+                    toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
+                    metricUnitSuffix(rule.metric, temperatureUnit)
+                  )}
                   {sinceTimestamp ? ` · ${preciseAgoLabel(sinceTimestamp)}` : ""}
                 </CardDescription>
               </CardHeader>

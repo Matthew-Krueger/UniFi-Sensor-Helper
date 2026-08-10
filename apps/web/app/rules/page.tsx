@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { Latch, ProtectConsole, RangeHysteresis, RuleCondition, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
+import type { Latch, Metric, ProtectConsole, RangeHysteresis, RuleCondition, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
 import {
   DURATION_PRESETS,
   conditionSummary,
@@ -16,6 +16,7 @@ import {
   validateCondition,
 } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
+import { metricUnitSuffix, toDisplayCondition, toStoredValue } from "@/lib/units";
 
 // CRUD over /api/latches — "Rule" is the user-facing name for what the
 // domain model (SPEC.md section 4) and API still call a Latch internally;
@@ -55,6 +56,7 @@ const emptyForm = {
 export default function RulesPage() {
   const { user: actor } = useCurrentUser();
   const canEdit = hasRole(actor, "admin");
+  const temperatureUnit = actor?.temperatureUnit ?? "C";
   const [rules, setRules] = React.useState<MaskedLatch[]>([]);
   const [sensors, setSensors] = React.useState<Sensor[]>([]);
   const [sensorStatuses, setSensorStatuses] = React.useState<SensorStatus[]>([]);
@@ -84,6 +86,7 @@ export default function RulesPage() {
   }, [load]);
 
   const selectedSensor = sensors.find((s) => s.id === form.sensorId);
+  const unitSuffix = form.metric ? metricUnitSuffix(form.metric as Metric, temperatureUnit) : "";
 
   function sensorName(id: string): string {
     return sensors.find((s) => s.id === id)?.name ?? id;
@@ -104,10 +107,16 @@ export default function RulesPage() {
     return effectiveInterval(observed, console_.defaultIntervalSeconds);
   }, [selectedSensor, form.metric, consoles, sensorStatuses]);
 
+  // Fields are typed in the user's display unit (e.g. Fahrenheit) — convert
+  // to the storage/evaluation unit (always Celsius for temperature) before
+  // building the condition that gets sent to the API.
   function buildCondition(): RuleCondition {
+    const metric = form.metric as Metric;
+    const toStored = (v: number) => toStoredValue(metric, v, temperatureUnit);
+
     if (form.conditionType === "between") {
-      const low = Number(form.low);
-      const high = Number(form.high);
+      const low = toStored(Number(form.low));
+      const high = toStored(Number(form.high));
       if (!Number.isFinite(low) || !Number.isFinite(high)) throw new Error("low and high bounds must be numbers");
 
       const hysteresis: RangeHysteresis =
@@ -115,15 +124,15 @@ export default function RulesPage() {
           ? { mode: "auto", marginPercent: Number(form.marginPercent) }
           : {
               mode: "manual",
-              clearLow: form.clearLow ? Number(form.clearLow) : low,
-              clearHigh: form.clearHigh ? Number(form.clearHigh) : high,
+              clearLow: form.clearLow ? toStored(Number(form.clearLow)) : low,
+              clearHigh: form.clearHigh ? toStored(Number(form.clearHigh)) : high,
             };
       return { type: "between", low, high, hysteresis };
     }
 
-    const threshold = Number(form.threshold);
+    const threshold = toStored(Number(form.threshold));
     if (!Number.isFinite(threshold)) throw new Error("threshold must be a number");
-    const clearThreshold = form.clearThreshold ? Number(form.clearThreshold) : threshold;
+    const clearThreshold = form.clearThreshold ? toStored(Number(form.clearThreshold)) : threshold;
     return { type: form.conditionType, threshold, hysteresis: { mode: "manual", clearThreshold } };
   }
 
@@ -268,7 +277,7 @@ export default function RulesPage() {
                 {form.conditionType === "between" ? (
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs text-muted-foreground">Low bound</label>
+                      <label className="text-xs text-muted-foreground">Low bound{unitSuffix && ` (${unitSuffix})`}</label>
                       <Input
                         type="number"
                         value={form.low}
@@ -277,7 +286,7 @@ export default function RulesPage() {
                       />
                     </div>
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs text-muted-foreground">High bound</label>
+                      <label className="text-xs text-muted-foreground">High bound{unitSuffix && ` (${unitSuffix})`}</label>
                       <Input
                         type="number"
                         value={form.high}
@@ -288,7 +297,7 @@ export default function RulesPage() {
                   </div>
                 ) : (
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">Threshold</label>
+                    <label className="text-xs text-muted-foreground">Threshold{unitSuffix && ` (${unitSuffix})`}</label>
                     <Input
                       type="number"
                       value={form.threshold}
@@ -300,9 +309,10 @@ export default function RulesPage() {
 
                 {form.conditionType === "between" ? (
                   <div className="flex flex-col gap-2 rounded-md border border-border p-3">
-                    <label className="text-xs text-muted-foreground">
-                      Hysteresis (how far it must move back inside/outside before this can re-arm)
-                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      The alarm releases once the reading moves back outside this range by enough to count as
+                      recovered — set that recovery point manually, or let it expand automatically by a percentage.
+                    </p>
                     <div className="flex gap-1">
                       <Button
                         type="button"
@@ -324,7 +334,9 @@ export default function RulesPage() {
                     {form.hysteresisMode === "manual" ? (
                       <div className="grid grid-cols-2 gap-3">
                         <div className="flex flex-col gap-1">
-                          <label className="text-xs text-muted-foreground">Clear below</label>
+                          <label className="text-xs text-muted-foreground">
+                            Releases below{unitSuffix && ` (${unitSuffix})`}
+                          </label>
                           <Input
                             type="number"
                             value={form.clearLow}
@@ -333,7 +345,9 @@ export default function RulesPage() {
                           />
                         </div>
                         <div className="flex flex-col gap-1">
-                          <label className="text-xs text-muted-foreground">Clear above</label>
+                          <label className="text-xs text-muted-foreground">
+                            Releases above{unitSuffix && ` (${unitSuffix})`}
+                          </label>
                           <Input
                             type="number"
                             value={form.clearHigh}
@@ -344,10 +358,7 @@ export default function RulesPage() {
                       </div>
                     ) : (
                       <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground">
-                          Margin — percent of the range's width added outside both bounds before it counts as
-                          cleared
-                        </label>
+                        <label className="text-xs text-muted-foreground">Release margin (%)</label>
                         <Input
                           type="number"
                           value={form.marginPercent}
@@ -355,18 +366,28 @@ export default function RulesPage() {
                           placeholder="e.g. 5"
                           required
                         />
+                        <p className="text-xs text-muted-foreground">
+                          Expands the range outward by this percent of its width on both sides before it counts as
+                          released.
+                        </p>
                       </div>
                     )}
                   </div>
                 ) : (
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">Clear threshold (optional)</label>
+                    <label className="text-xs text-muted-foreground">
+                      Alarm releases at{unitSuffix && ` (${unitSuffix})`} (optional)
+                    </label>
                     <Input
                       type="number"
                       value={form.clearThreshold}
                       onChange={(e) => setForm({ ...form, clearThreshold: e.target.value })}
-                      placeholder="defaults to threshold — set this to add hysteresis"
+                      placeholder="defaults to the threshold above"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      This is the point at which the alarm releases once fired. If left blank, it releases as soon
+                      as the reading crosses back over the threshold itself.
+                    </p>
                   </div>
                 )}
 
@@ -466,7 +487,12 @@ export default function RulesPage() {
               <TableRow key={rule.id}>
                 <TableCell>{sensorName(rule.sensorId)}</TableCell>
                 <TableCell>{rule.metric}</TableCell>
-                <TableCell>{conditionSummary(rule.condition)}</TableCell>
+                <TableCell>
+                  {conditionSummary(
+                    toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
+                    metricUnitSuffix(rule.metric, temperatureUnit)
+                  )}
+                </TableCell>
                 <TableCell>{Math.round(rule.durationSeconds / 60)}m</TableCell>
                 <TableCell className="font-mono text-xs">{rule.webhook.url}</TableCell>
                 <TableCell>

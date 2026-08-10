@@ -10,6 +10,7 @@ import { DURATION_PRESETS, effectiveInterval } from "@unifi-sensor-latch/shared"
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
 import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { celsiusToFahrenheit } from "@/lib/units";
 
 // Discovery-driven — SPEC.md section 12: sensors are never hand-typed, only
 // ever listed from what /api/sensors/discover found on a configured
@@ -65,7 +66,7 @@ function reportingBadge(
 function formatValue(metric: string, value: number, temperatureUnit: "C" | "F"): string {
   switch (metric) {
     case "temperature": {
-      if (temperatureUnit === "F") return `${((value * 9) / 5 + 32).toFixed(1)}°F`;
+      if (temperatureUnit === "F") return `${celsiusToFahrenheit(value).toFixed(1)}°F`;
       return `${value.toFixed(1)}°C`;
     }
     case "humidity":
