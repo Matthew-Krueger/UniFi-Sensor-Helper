@@ -20,7 +20,7 @@ const ws = new WebSocket(url, {
   tls: { rejectUnauthorized: false },
 } as any);
 
-ws.addEventListener("open", () => console.log("connected, waiting for events (30s)..."));
+ws.addEventListener("open", () => console.log("connected, waiting for events (90s)..."));
 ws.addEventListener("message", (ev) => console.log("event:", ev.data));
 ws.addEventListener("error", (ev) => console.error("error:", ev));
 ws.addEventListener("close", (ev) => console.log("closed:", ev.code, ev.reason));
@@ -29,4 +29,4 @@ setTimeout(() => {
   console.log("timeout reached, closing.");
   ws.close();
   process.exit(0);
-}, 8_000);
+}, 90_000);

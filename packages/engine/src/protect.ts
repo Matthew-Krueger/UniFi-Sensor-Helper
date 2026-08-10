@@ -139,9 +139,25 @@ export function rawSensorToReadings(sensorId: string, raw: Partial<RawSensor>, t
   return readings;
 }
 
+// id is `string | string[]` per the live OpenAPI spec's
+// deviceBulkPartialWithReference schema — when multiple devices of the
+// same modelKey change the same field(s) at once, Protect coalesces them
+// into one message with an *array* of ids sharing one delta payload,
+// rather than sending one message per device. Handling only the single-id
+// case (as this did originally) means any bulk-coalesced sensor update
+// silently produces a reading attributed to no real sensor (an array
+// compared against string sensor ids never matches) — the exact shape of
+// bug that looks like "the sensor stopped reporting" when it didn't.
 interface DeviceEventMessage {
   type: "add" | "update" | "remove";
-  item: Partial<RawSensor> & { id: string; modelKey: string };
+  item: Partial<RawSensor> & { id: string | string[]; modelKey: string };
+}
+
+// Pulled out of the websocket handler so the id-array-vs-single-string
+// normalization is independently testable without a real socket.
+export function readingsFromDeviceEventItem(item: DeviceEventMessage["item"], timestamp: number): Reading[] {
+  const ids = Array.isArray(item.id) ? item.id : [item.id];
+  return ids.flatMap((id) => rawSensorToReadings(id, item, timestamp));
 }
 
 export interface DeviceSubscription {
@@ -186,8 +202,9 @@ export function subscribeDevices(
       if (msg.type !== "update" && msg.type !== "add") return;
       if (msg.item.modelKey !== "sensor") return;
 
-      const readings = rawSensorToReadings(msg.item.id, msg.item, Date.now());
-      for (const reading of readings) onReading(reading);
+      for (const reading of readingsFromDeviceEventItem(msg.item, Date.now())) {
+        onReading(reading);
+      }
     });
 
     ws.addEventListener("close", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { rawSensorToReadings, rawSensorToSensor, type RawSensor } from "../src/protect";
+import { rawSensorToReadings, rawSensorToSensor, readingsFromDeviceEventItem, type RawSensor } from "../src/protect";
 
 // Fixture matches the real shape returned by a live console's GET
 // /v1/sensors (captured during API discovery — see API_NOTES.md), not a
@@ -67,5 +67,33 @@ describe("rawSensorToReadings", () => {
     // notes. Must NOT synthesize readings for metrics that didn't change.
     const readings = rawSensorToReadings("s1", { id: "s1" } as any, 1_000);
     expect(readings).toHaveLength(0);
+  });
+});
+
+describe("readingsFromDeviceEventItem", () => {
+  test("a single-id item yields readings attributed to that one sensor", () => {
+    const readings = readingsFromDeviceEventItem(
+      { id: "sensor-a", modelKey: "sensor", stats: { temperature: { value: 21.5 } } },
+      1_000
+    );
+    expect(readings).toEqual([{ sensorId: "sensor-a", metric: "temperature", value: 21.5, timestamp: 1_000 }]);
+  });
+
+  // The bug this test guards against: per the live OpenAPI spec's
+  // deviceBulkPartialWithReference schema, Protect can coalesce multiple
+  // devices that changed the same field(s) at once into one message with
+  // item.id as an *array*. Treating that array as a single sensor id (the
+  // original bug) means the reading is attributed to no real sensor —
+  // silently dropped, looking exactly like "the sensor stopped reporting."
+  test("a bulk item with an array of ids fans the same delta out to every sensor in it", () => {
+    const readings = readingsFromDeviceEventItem(
+      { id: ["sensor-a", "sensor-b", "sensor-c"], modelKey: "sensor", stats: { humidity: { value: 44 } } },
+      2_000
+    );
+    expect(readings).toEqual([
+      { sensorId: "sensor-a", metric: "humidity", value: 44, timestamp: 2_000 },
+      { sensorId: "sensor-b", metric: "humidity", value: 44, timestamp: 2_000 },
+      { sensorId: "sensor-c", metric: "humidity", value: 44, timestamp: 2_000 },
+    ]);
   });
 });
