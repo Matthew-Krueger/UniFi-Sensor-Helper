@@ -110,6 +110,10 @@ export function NavDrawer({ links, username, role }: NavDrawerProps) {
                 })}
               </nav>
               <div className="mt-auto flex flex-col gap-3 border-t border-border pt-4">
+                <div className="flex items-center gap-1">
+                  <TemperatureUnitToggle />
+                  <ThemeToggle />
+                </div>
                 {username && (
                   <span className="text-sm text-muted-foreground">
                     {username} <span className="text-xs">({role})</span>
@@ -120,10 +124,6 @@ export function NavDrawer({ links, username, role }: NavDrawerProps) {
             </SheetContent>
           </Sheet>
           <span className="font-semibold">UnifiSensorLatch</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <TemperatureUnitToggle />
-          <ThemeToggle />
         </div>
       </div>
     </header>

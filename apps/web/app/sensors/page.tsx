@@ -91,6 +91,29 @@ function MetricIcon({ metric }: { metric: string }) {
   return <Icon className="h-4 w-4 text-purple-600 dark:text-purple-400" />;
 }
 
+// Picks a column count explicitly by item count rather than leaving it to
+// a fixed breakpoint-driven grid — a fixed `sm:grid-cols-2 lg:grid-cols-3`
+// wraps 4 items as 3-then-1, which reads as a mistake rather than a
+// layout. 4 items get an explicit 2x2; small counts get exactly as many
+// columns as items (never an empty gap); larger counts fall back to a
+// normal responsive flow since there's no single "neat" arrangement once
+// a wrap is unavoidable.
+function gridColsForCount(count: number): string {
+  switch (count) {
+    case 0:
+    case 1:
+      return "grid-cols-1";
+    case 2:
+      return "grid-cols-1 sm:grid-cols-2";
+    case 3:
+      return "grid-cols-1 sm:grid-cols-3";
+    case 4:
+      return "grid-cols-1 sm:grid-cols-2"; // 2x2, not 3-then-1
+    default:
+      return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
+  }
+}
+
 export default function SensorsPage() {
   useNowTick(); // keeps "last contacted"/"refreshed" ticking live, second-by-second
   const { user: actor } = useCurrentUser();
@@ -241,7 +264,7 @@ export default function SensorsPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className={`grid gap-3 ${gridColsForCount(consoleSensors.length)}`}>
                     {consoleSensors.map((sensor) => {
                       const sensorStatus = statuses.find((s) => s.sensorId === sensor.id);
                       return (
@@ -253,7 +276,7 @@ export default function SensorsPage() {
                           {sensor.metrics.length === 0 ? (
                             <span className="text-xs text-muted-foreground">No metrics enabled</span>
                           ) : (
-                            <div className="flex flex-wrap justify-center gap-1">
+                            <div className={`grid justify-items-center gap-1 ${gridColsForCount(sensor.metrics.length)}`}>
                               {sensor.metrics.map((m) => {
                                 const value = sensorStatus?.values[m];
                                 return (
