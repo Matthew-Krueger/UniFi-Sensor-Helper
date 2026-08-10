@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import type { ConsoleStatus, ProtectConsole } from "@unifi-sensor-latch/shared";
 import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
+import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
 
 // Reuses the same Unifi-matched preset list Rules use for durations —
 // "how often do we expect a sensor to report" and "how long must a rule
@@ -98,9 +99,23 @@ export default function ConsolesPage() {
 
   const anyActive = statuses.some((s) => s.connectionState === "connecting");
 
+  // See usePausedWhileSelectFocused's doc comment — avoids a real Firefox
+  // crash when a poll-driven re-render mutates a <select> while its
+  // dropdown popup is open (this page's per-console interval dropdown).
+  const paused = usePausedWhileSelectFocused();
+  const pausedRef = React.useRef(paused);
+  React.useEffect(() => {
+    pausedRef.current = paused;
+  }, [paused]);
+
   React.useEffect(() => {
     load();
-    const id = setInterval(load, anyActive ? POLL_MS_ACTIVE : POLL_MS_IDLE);
+    const id = setInterval(
+      () => {
+        if (!pausedRef.current) load();
+      },
+      anyActive ? POLL_MS_ACTIVE : POLL_MS_IDLE
+    );
     return () => clearInterval(id);
   }, [load, anyActive]);
 

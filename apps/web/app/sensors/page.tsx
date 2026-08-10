@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import type { ProtectConsole, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
 import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
+import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
 
 // Discovery-driven — SPEC.md section 12: sensors are never hand-typed, only
 // ever listed from what /api/sensors/discover found on a configured
@@ -64,9 +65,21 @@ export default function SensorsPage() {
     if (consolesRes.ok) setConsoles((await consolesRes.json()).consoles);
   }, []);
 
+  // See usePausedWhileSelectFocused's doc comment — avoids a real Firefox
+  // crash when a poll-driven re-render mutates a <select> while its
+  // dropdown popup is open. Read via a ref so focus/blur doesn't tear
+  // down and recreate the interval on every keystroke.
+  const paused = usePausedWhileSelectFocused();
+  const pausedRef = React.useRef(paused);
+  React.useEffect(() => {
+    pausedRef.current = paused;
+  }, [paused]);
+
   React.useEffect(() => {
     load();
-    const id = setInterval(load, POLL_MS);
+    const id = setInterval(() => {
+      if (!pausedRef.current) load();
+    }, POLL_MS);
     return () => clearInterval(id);
   }, [load]);
 
