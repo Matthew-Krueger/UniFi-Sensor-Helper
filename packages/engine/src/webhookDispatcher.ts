@@ -1,5 +1,5 @@
 import type { Latch, WebhookTarget } from "@unifi-sensor-latch/shared";
-import { maskSecret } from "@unifi-sensor-latch/shared";
+import { maskSecret, conditionThresholdTemplateValue } from "@unifi-sensor-latch/shared";
 
 // Fires the webhook configured on a Latch's "fired" or "resolvedWebhook"
 // transition. Pure-ish: the only I/O is the injected `fetchImpl` (defaults
@@ -29,7 +29,7 @@ function renderTemplate(template: string, ctx: DispatchContext): string {
     .replaceAll("{{sensorName}}", ctx.sensorName)
     .replaceAll("{{metric}}", ctx.latch.metric)
     .replaceAll("{{value}}", String(ctx.value))
-    .replaceAll("{{threshold}}", String(ctx.latch.armThreshold))
+    .replaceAll("{{threshold}}", conditionThresholdTemplateValue(ctx.latch.condition))
     .replaceAll("{{durationMinutes}}", String(durationMinutes));
 }
 
