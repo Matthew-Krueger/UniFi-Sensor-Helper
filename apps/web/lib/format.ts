@@ -24,6 +24,23 @@ export function preciseAgoLabel(timestamp: number | null): string {
   return `${parts.join(" ")} ago`;
 }
 
+// Compact "1d 2h 3m" style for a plain span of time (not "ago" from now)
+// — skips zero units, so it matches the level of precision a custom
+// DD:HH:MM:SS rule duration actually offers instead of collapsing
+// everything down to whole minutes.
+export function formatDuration(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const seconds = s % 60;
+
+  const parts = [days > 0 && `${days}d`, hours > 0 && `${hours}h`, minutes > 0 && `${minutes}m`, seconds > 0 && `${seconds}s`].filter(
+    Boolean
+  );
+  return parts.length > 0 ? parts.join(" ") : "0s";
+}
+
 // Exact wall-clock time for a title/tooltip alongside the relative label.
 export function absoluteTimeLabel(timestamp: number): string {
   return new Date(timestamp).toLocaleString();

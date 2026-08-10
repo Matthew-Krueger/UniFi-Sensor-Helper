@@ -29,7 +29,7 @@ import {
 } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { metricUnitSuffix, toDisplayCondition, toStoredValue } from "@/lib/units";
-import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { absoluteTimeLabel, formatDuration, preciseAgoLabel, useNowTick } from "@/lib/format";
 
 // CRUD over /api/latches — "Rule" is the user-facing name for what the
 // domain model (SPEC.md section 4) and API still call a Latch internally;
@@ -86,6 +86,34 @@ function buildWebhookTarget(v: WebhookFormValue): WebhookTarget {
   return { kind: "custom", url: v.url, method: v.method, bearerToken: v.bearerToken || undefined };
 }
 
+// Duration can be picked from the Unifi-matched preset list or typed as
+// an arbitrary DD:HH:MM:SS — the server only ever validates the resulting
+// total seconds against the sensor's effective interval (see
+// /api/latches's route), it was never actually restricted to the preset
+// list, so this is a pure UI addition, no API change needed.
+function secondsToParts(totalSeconds: number): { days: string; hours: string; minutes: string; seconds: string } {
+  let s = Math.max(0, Math.floor(totalSeconds));
+  const days = Math.floor(s / 86400);
+  s -= days * 86400;
+  const hours = Math.floor(s / 3600);
+  s -= hours * 3600;
+  const minutes = Math.floor(s / 60);
+  s -= minutes * 60;
+  return { days: String(days), hours: String(hours), minutes: String(minutes), seconds: String(s) };
+}
+
+function partsToSeconds(days: string, hours: string, minutes: string, seconds: string): number {
+  return (Number(days) || 0) * 86400 + (Number(hours) || 0) * 3600 + (Number(minutes) || 0) * 60 + (Number(seconds) || 0);
+}
+
+function getDurationSeconds(form: FormState): number | null {
+  if (form.durationMode === "preset") {
+    return form.durationPreset === "" ? null : form.durationPreset;
+  }
+  const total = partsToSeconds(form.customDays, form.customHours, form.customMinutes, form.customSeconds);
+  return total > 0 ? total : null;
+}
+
 const emptyForm = {
   sensorId: "",
   metric: "" as Sensor["metrics"][number] | "",
@@ -98,7 +126,12 @@ const emptyForm = {
   clearLow: "", // between manual
   clearHigh: "", // between manual
   marginPercent: "", // between auto
-  durationSeconds: "" as number | "",
+  durationMode: "preset" as "preset" | "custom",
+  durationPreset: "" as number | "",
+  customDays: "0",
+  customHours: "0",
+  customMinutes: "0",
+  customSeconds: "0",
   webhook: emptyWebhookFormValue(),
   resolvedWebhookEnabled: false,
   resolvedWebhook: emptyWebhookFormValue(),
@@ -338,6 +371,10 @@ export default function RulesPage() {
     return effectiveInterval(observed, console_.defaultIntervalSeconds);
   }, [selectedSensor, form.metric, consoles, sensorStatuses]);
 
+  const customDurationSeconds = partsToSeconds(form.customDays, form.customHours, form.customMinutes, form.customSeconds);
+  const customDurationTooShort =
+    form.durationMode === "custom" && selectedInterval != null && customDurationSeconds < selectedInterval.seconds;
+
   // Fields are typed in the user's display unit (e.g. Fahrenheit) — convert
   // to the storage/evaluation unit (always Celsius for temperature) before
   // building the condition that gets sent to the API.
@@ -376,11 +413,23 @@ export default function RulesPage() {
 
   function openEditDialog(rule: RuleRow) {
     const displayCondition = toDisplayCondition(rule.condition, rule.metric, temperatureUnit);
+    const matchesPreset = DURATION_PRESETS.some((p) => p.seconds === rule.durationSeconds);
+    const parts = secondsToParts(rule.durationSeconds);
+    const durationFields = matchesPreset
+      ? { durationMode: "preset" as const, durationPreset: rule.durationSeconds }
+      : {
+          durationMode: "custom" as const,
+          durationPreset: "" as const,
+          customDays: parts.days,
+          customHours: parts.hours,
+          customMinutes: parts.minutes,
+          customSeconds: parts.seconds,
+        };
     setForm({
       ...emptyForm,
       sensorId: rule.sensorId,
       metric: rule.metric,
-      durationSeconds: rule.durationSeconds,
+      ...durationFields,
       webhook: webhookFormValueFromTarget(rule.webhook),
       resolvedWebhookEnabled: rule.resolvedWebhook != null,
       resolvedWebhook: webhookFormValueFromTarget(rule.resolvedWebhook),
@@ -398,8 +447,8 @@ export default function RulesPage() {
     setError(null);
     try {
       if (!form.sensorId || !form.metric) throw new Error("sensor and metric are required");
-      if (form.durationSeconds === "") throw new Error("duration is required");
-      const durationSeconds = form.durationSeconds;
+      const durationSeconds = getDurationSeconds(form);
+      if (durationSeconds == null) throw new Error("duration is required");
 
       const condition = buildCondition();
       const conditionCheck = validateCondition(condition);
@@ -515,7 +564,7 @@ export default function RulesPage() {
               <select
                 className="h-9 rounded-md border border-border bg-background px-3 text-sm"
                 value={form.sensorId}
-                onChange={(e) => setForm({ ...form, sensorId: e.target.value, metric: "", durationSeconds: "" })}
+                onChange={(e) => setForm({ ...form, sensorId: e.target.value, metric: "", durationPreset: "" })}
                 required
               >
                 <option value="" disabled>
@@ -535,7 +584,7 @@ export default function RulesPage() {
                 className="h-9 rounded-md border border-border bg-background px-3 text-sm"
                 value={form.metric}
                 onChange={(e) =>
-                  setForm({ ...form, metric: e.target.value as Sensor["metrics"][number], durationSeconds: "" })
+                  setForm({ ...form, metric: e.target.value as Sensor["metrics"][number], durationPreset: "" })
                 }
                 disabled={!selectedSensor}
                 required
@@ -687,33 +736,97 @@ export default function RulesPage() {
               </div>
             )}
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">
-                Duration (armed for at least this long before firing)
-              </label>
-              <select
-                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                value={form.durationSeconds}
-                onChange={(e) => setForm({ ...form, durationSeconds: Number(e.target.value) })}
-                required
-              >
-                <option value="" disabled>
-                  Select a duration
-                </option>
-                {DURATION_PRESETS.map((p) => {
-                  const tooShort = selectedInterval ? p.seconds < selectedInterval.seconds : false;
-                  return (
-                    <option key={p.seconds} value={p.seconds} disabled={tooShort}>
-                      {p.label}
-                      {tooShort ? " (too short for this sensor)" : ""}
-                    </option>
-                  );
-                })}
-              </select>
+            <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-muted-foreground">
+                  Duration (armed for at least this long before firing)
+                </label>
+                <div className="flex gap-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={form.durationMode === "preset" ? "default" : "outline"}
+                    onClick={() => setForm({ ...form, durationMode: "preset" })}
+                  >
+                    Preset
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={form.durationMode === "custom" ? "default" : "outline"}
+                    onClick={() => setForm({ ...form, durationMode: "custom" })}
+                  >
+                    Custom
+                  </Button>
+                </div>
+              </div>
+
+              {form.durationMode === "preset" ? (
+                <select
+                  className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                  value={form.durationPreset}
+                  onChange={(e) => setForm({ ...form, durationPreset: Number(e.target.value) })}
+                  required
+                >
+                  <option value="" disabled>
+                    Select a duration
+                  </option>
+                  {DURATION_PRESETS.map((p) => {
+                    const tooShort = selectedInterval ? p.seconds < selectedInterval.seconds : false;
+                    return (
+                      <option key={p.seconds} value={p.seconds} disabled={tooShort}>
+                        {p.label}
+                        {tooShort ? " (too short for this sensor)" : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+              ) : (
+                <div className="grid grid-cols-4 gap-2">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground">Days</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={form.customDays}
+                      onChange={(e) => setForm({ ...form, customDays: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground">Hours</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={form.customHours}
+                      onChange={(e) => setForm({ ...form, customHours: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground">Minutes</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={form.customMinutes}
+                      onChange={(e) => setForm({ ...form, customMinutes: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground">Seconds</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={form.customSeconds}
+                      onChange={(e) => setForm({ ...form, customSeconds: e.target.value })}
+                    />
+                  </div>
+                </div>
+              )}
+
               {selectedInterval && (
-                <p className="text-xs text-muted-foreground">
+                <p className={`text-xs ${customDurationTooShort ? "text-red-600" : "text-muted-foreground"}`}>
                   This sensor's effective reporting interval is ~{selectedInterval.seconds}s (
-                  {selectedInterval.source.replace("-", " ")}) — durations shorter than that are disabled above.
+                  {selectedInterval.source.replace("-", " ")}) — durations shorter than that{" "}
+                  {form.durationMode === "preset" ? "are disabled above" : "will be rejected"}.
                 </p>
               )}
             </div>
@@ -836,7 +949,7 @@ export default function RulesPage() {
                       metricUnitSuffix(rule.metric, temperatureUnit)
                     )}
                   </TableCell>
-                  <TableCell>{Math.round(rule.durationSeconds / 60)}m</TableCell>
+                  <TableCell>{formatDuration(rule.durationSeconds)}</TableCell>
                   <TableCell>
                     <Badge variant={rule.enabled ? "outline" : "idle"}>{rule.enabled ? "enabled" : "disabled"}</Badge>
                   </TableCell>

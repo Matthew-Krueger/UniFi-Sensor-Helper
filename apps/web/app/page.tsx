@@ -4,7 +4,7 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Latch, LatchStateRecord, Sensor } from "@unifi-sensor-latch/shared";
-import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { absoluteTimeLabel, formatDuration, preciseAgoLabel, useNowTick } from "@/lib/format";
 import { conditionSummary } from "@unifi-sensor-latch/shared";
 import { metricUnitSuffix, toDisplayCondition } from "@/lib/units";
 import { useCurrentUser } from "@/lib/useCurrentUser";
@@ -96,7 +96,7 @@ export default function DashboardPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground">
-                Arms for {Math.round(rule.durationSeconds / 60)}m before firing.
+                Arms for {formatDuration(rule.durationSeconds)} before firing.
                 {!rule.enabled && <div className="mt-1 text-amber-600 dark:text-amber-400">Disabled</div>}
               </CardContent>
             </Card>
