@@ -4,10 +4,19 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { Latch, Metric, ProtectConsole, RangeHysteresis, RuleCondition, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
+import type {
+  Latch,
+  Metric,
+  ProtectConsole,
+  RangeHysteresis,
+  RuleCondition,
+  Sensor,
+  SensorStatus,
+  WebhookDelivery,
+} from "@unifi-sensor-latch/shared";
 import {
   DURATION_PRESETS,
   conditionSummary,
@@ -17,17 +26,17 @@ import {
 } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { metricUnitSuffix, toDisplayCondition, toStoredValue } from "@/lib/units";
+import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
 
 // CRUD over /api/latches — "Rule" is the user-facing name for what the
 // domain model (SPEC.md section 4) and API still call a Latch internally;
 // the mechanism (arm/clear hysteresis) is the same either way, "Rule" is
 // just the friendlier name in the UI. Sensor + metric picker only offers
 // metrics a discovered sensor actually exposes (SPEC.md section 12 —
-// never hand-typed). Webhook URLs always arrive from the API pre-masked
-// (CLAUDE.md obfuscation); this page never has the real value once a rule
-// is saved.
-
-type MaskedLatch = Omit<Latch, "webhook" | "resolvedWebhook"> & {
+// never hand-typed). Webhook URLs arrive from the API masked only for the
+// read-only "user" role (CLAUDE.md's obfuscation exception) — admin sees
+// the real value, since it can already create/edit/delete/test rules.
+type RuleRow = Omit<Latch, "webhook" | "resolvedWebhook"> & {
   webhook: Latch["webhook"];
   resolvedWebhook?: Latch["resolvedWebhook"];
 };
@@ -51,18 +60,60 @@ const emptyForm = {
   webhookUrl: "",
   webhookMethod: "POST" as Latch["webhook"]["method"],
   resolvedWebhookUrl: "",
+  enabled: true,
 };
 
+type FormState = typeof emptyForm;
+
+// Reverse of buildCondition — populates the edit form's fields (in the
+// user's display unit) from an existing rule's stored (always-Celsius)
+// condition.
+function conditionToFormFields(condition: RuleCondition): Partial<FormState> {
+  if (condition.type === "between") {
+    return {
+      conditionType: "between",
+      low: String(condition.low),
+      high: String(condition.high),
+      threshold: "",
+      clearThreshold: "",
+      hysteresisMode: condition.hysteresis.mode,
+      clearLow: condition.hysteresis.mode === "manual" ? String(condition.hysteresis.clearLow) : "",
+      clearHigh: condition.hysteresis.mode === "manual" ? String(condition.hysteresis.clearHigh) : "",
+      marginPercent: condition.hysteresis.mode === "auto" ? String(condition.hysteresis.marginPercent) : "",
+    };
+  }
+  return {
+    conditionType: condition.type,
+    threshold: String(condition.threshold),
+    low: "",
+    high: "",
+    hysteresisMode: "manual",
+    clearLow: "",
+    clearHigh: "",
+    marginPercent: "",
+    clearThreshold: String(condition.hysteresis.clearThreshold),
+  };
+}
+
+function deliveryBadgeVariant(delivery: WebhookDelivery): "good" | "fired" {
+  return delivery.ok ? "good" : "fired";
+}
+
 export default function RulesPage() {
+  useNowTick(); // keeps "last used" ticking live, second-by-second
   const { user: actor } = useCurrentUser();
   const canEdit = hasRole(actor, "admin");
   const temperatureUnit = actor?.temperatureUnit ?? "C";
-  const [rules, setRules] = React.useState<MaskedLatch[]>([]);
+  const [rules, setRules] = React.useState<RuleRow[]>([]);
   const [sensors, setSensors] = React.useState<Sensor[]>([]);
   const [sensorStatuses, setSensorStatuses] = React.useState<SensorStatus[]>([]);
   const [consoles, setConsoles] = React.useState<ProtectConsole[]>([]);
+  const [deliveries, setDeliveries] = React.useState<Record<string, WebhookDelivery[]>>({});
   const [open, setOpen] = React.useState(false);
-  const [form, setForm] = React.useState(emptyForm);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [historyRuleId, setHistoryRuleId] = React.useState<string | null>(null);
+  const [testingId, setTestingId] = React.useState<string | null>(null);
+  const [form, setForm] = React.useState<FormState>(emptyForm);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
@@ -72,14 +123,33 @@ export default function RulesPage() {
       fetch("/api/sensors"),
       fetch("/api/consoles"),
     ]);
-    if (rulesRes.ok) setRules((await rulesRes.json()).latches);
+    let loadedRules: RuleRow[] = [];
+    if (rulesRes.ok) {
+      loadedRules = (await rulesRes.json()).latches;
+      setRules(loadedRules);
+    }
     if (sensorsRes.ok) {
       const body = await sensorsRes.json();
       setSensors(body.sensors);
       setSensorStatuses(body.statuses);
     }
     if (consolesRes.ok) setConsoles((await consolesRes.json()).consoles);
-  }, []);
+
+    // Delivery history is admin-only server-side (CLAUDE.md) — don't even
+    // attempt the fetch for a read-only "user" session.
+    if (canEdit && loadedRules.length > 0) {
+      const results = await Promise.all(
+        loadedRules.map(async (rule) => {
+          const res = await fetch(`/api/latches/${rule.id}/deliveries`);
+          if (!res.ok) return [rule.id, []] as const;
+          const body = await res.json();
+          return [rule.id, body.deliveries as WebhookDelivery[]] as const;
+        })
+      );
+      setDeliveries(Object.fromEntries(results));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canEdit]);
 
   React.useEffect(() => {
     load();
@@ -136,7 +206,32 @@ export default function RulesPage() {
     return { type: form.conditionType, threshold, hysteresis: { mode: "manual", clearThreshold } };
   }
 
-  async function createRule(e: React.FormEvent) {
+  function openCreateDialog() {
+    setForm(emptyForm);
+    setEditingId(null);
+    setError(null);
+    setOpen(true);
+  }
+
+  function openEditDialog(rule: RuleRow) {
+    const displayCondition = toDisplayCondition(rule.condition, rule.metric, temperatureUnit);
+    setForm({
+      ...emptyForm,
+      sensorId: rule.sensorId,
+      metric: rule.metric,
+      durationSeconds: rule.durationSeconds,
+      webhookUrl: rule.webhook.url,
+      webhookMethod: rule.webhook.method,
+      resolvedWebhookUrl: rule.resolvedWebhook?.url ?? "",
+      enabled: rule.enabled,
+      ...conditionToFormFields(displayCondition),
+    });
+    setEditingId(rule.id);
+    setError(null);
+    setOpen(true);
+  }
+
+  async function submitRule(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     setError(null);
@@ -153,8 +248,7 @@ export default function RulesPage() {
         throw new Error("selected duration is too short for this sensor's reporting interval");
       }
 
-      const rule: Latch = {
-        id: crypto.randomUUID(),
+      const payload = {
         sensorId: form.sensorId,
         metric: form.metric as Sensor["metrics"][number],
         condition,
@@ -163,18 +257,26 @@ export default function RulesPage() {
         resolvedWebhook: form.resolvedWebhookUrl
           ? { url: form.resolvedWebhookUrl, method: form.webhookMethod }
           : undefined,
-        enabled: true,
+        enabled: form.enabled,
       };
 
-      const res = await fetch("/api/latches", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(rule),
-      });
+      const res = editingId
+        ? await fetch(`/api/latches/${editingId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          })
+        : await fetch("/api/latches", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: crypto.randomUUID(), ...payload }),
+          });
+
       const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "failed to create rule");
+      if (!res.ok) throw new Error(body.error ?? "failed to save rule");
 
       setForm(emptyForm);
+      setEditingId(null);
       setOpen(false);
       await load();
     } catch (err) {
@@ -184,7 +286,7 @@ export default function RulesPage() {
     }
   }
 
-  async function toggleEnabled(rule: MaskedLatch) {
+  async function toggleEnabled(rule: RuleRow) {
     await fetch(`/api/latches/${rule.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -198,260 +300,318 @@ export default function RulesPage() {
     await load();
   }
 
+  async function runTest(id: string) {
+    setTestingId(id);
+    try {
+      await fetch(`/api/latches/${id}/test`, { method: "POST" });
+      await load();
+      setHistoryRuleId(id);
+    } finally {
+      setTestingId(null);
+    }
+  }
+
+  const historyRule = rules.find((r) => r.id === historyRuleId);
+  const historyDeliveries = historyRuleId ? deliveries[historyRuleId] ?? [] : [];
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Rules</h1>
         {canEdit && (
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button size="sm" disabled={sensors.length === 0}>
-                New Rule
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-h-[85vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>New rule</DialogTitle>
-              </DialogHeader>
-              <form className="flex flex-col gap-3" onSubmit={createRule}>
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">Sensor</label>
-                  <select
-                    className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                    value={form.sensorId}
-                    onChange={(e) => setForm({ ...form, sensorId: e.target.value, metric: "", durationSeconds: "" })}
-                    required
-                  >
-                    <option value="" disabled>
-                      Select a sensor
-                    </option>
-                    {sensors.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">Metric</label>
-                  <select
-                    className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                    value={form.metric}
-                    onChange={(e) =>
-                      setForm({ ...form, metric: e.target.value as Sensor["metrics"][number], durationSeconds: "" })
-                    }
-                    disabled={!selectedSensor}
-                    required
-                  >
-                    <option value="" disabled>
-                      Select a metric
-                    </option>
-                    {selectedSensor?.metrics.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">Condition</label>
-                  <select
-                    className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                    value={form.conditionType}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        conditionType: e.target.value as ConditionType,
-                        hysteresisMode: "manual",
-                      })
-                    }
-                  >
-                    <option value="above">is above</option>
-                    <option value="below">is below</option>
-                    <option value="between">is between</option>
-                  </select>
-                </div>
-
-                {form.conditionType === "between" ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="flex flex-col gap-1">
-                      <label className="text-xs text-muted-foreground">Low bound{unitSuffix && ` (${unitSuffix})`}</label>
-                      <Input
-                        type="number"
-                        value={form.low}
-                        onChange={(e) => setForm({ ...form, low: e.target.value })}
-                        required
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-xs text-muted-foreground">High bound{unitSuffix && ` (${unitSuffix})`}</label>
-                      <Input
-                        type="number"
-                        value={form.high}
-                        onChange={(e) => setForm({ ...form, high: e.target.value })}
-                        required
-                      />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">Threshold{unitSuffix && ` (${unitSuffix})`}</label>
-                    <Input
-                      type="number"
-                      value={form.threshold}
-                      onChange={(e) => setForm({ ...form, threshold: e.target.value })}
-                      required
-                    />
-                  </div>
-                )}
-
-                {form.conditionType === "between" ? (
-                  <div className="flex flex-col gap-2 rounded-md border border-border p-3">
-                    <p className="text-xs text-muted-foreground">
-                      The alarm releases once the reading moves back outside this range by enough to count as
-                      recovered — set that recovery point manually, or let it expand automatically by a percentage.
-                    </p>
-                    <div className="flex gap-1">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={form.hysteresisMode === "manual" ? "default" : "outline"}
-                        onClick={() => setForm({ ...form, hysteresisMode: "manual" })}
-                      >
-                        Manual
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={form.hysteresisMode === "auto" ? "default" : "outline"}
-                        onClick={() => setForm({ ...form, hysteresisMode: "auto" })}
-                      >
-                        Auto
-                      </Button>
-                    </div>
-                    {form.hysteresisMode === "manual" ? (
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs text-muted-foreground">
-                            Releases below{unitSuffix && ` (${unitSuffix})`}
-                          </label>
-                          <Input
-                            type="number"
-                            value={form.clearLow}
-                            onChange={(e) => setForm({ ...form, clearLow: e.target.value })}
-                            placeholder="defaults to low bound"
-                          />
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs text-muted-foreground">
-                            Releases above{unitSuffix && ` (${unitSuffix})`}
-                          </label>
-                          <Input
-                            type="number"
-                            value={form.clearHigh}
-                            onChange={(e) => setForm({ ...form, clearHigh: e.target.value })}
-                            placeholder="defaults to high bound"
-                          />
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground">Release margin (%)</label>
-                        <Input
-                          type="number"
-                          value={form.marginPercent}
-                          onChange={(e) => setForm({ ...form, marginPercent: e.target.value })}
-                          placeholder="e.g. 5"
-                          required
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Expands the range outward by this percent of its width on both sides before it counts as
-                          released.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">
-                      Alarm releases at{unitSuffix && ` (${unitSuffix})`} (optional)
-                    </label>
-                    <Input
-                      type="number"
-                      value={form.clearThreshold}
-                      onChange={(e) => setForm({ ...form, clearThreshold: e.target.value })}
-                      placeholder="defaults to the threshold above"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      This is the point at which the alarm releases once fired. If left blank, it releases as soon
-                      as the reading crosses back over the threshold itself.
-                    </p>
-                  </div>
-                )}
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">
-                    Duration (armed for at least this long before firing)
-                  </label>
-                  <select
-                    className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                    value={form.durationSeconds}
-                    onChange={(e) => setForm({ ...form, durationSeconds: Number(e.target.value) })}
-                    required
-                  >
-                    <option value="" disabled>
-                      Select a duration
-                    </option>
-                    {DURATION_PRESETS.map((p) => {
-                      const tooShort = selectedInterval ? p.seconds < selectedInterval.seconds : false;
-                      return (
-                        <option key={p.seconds} value={p.seconds} disabled={tooShort}>
-                          {p.label}
-                          {tooShort ? " (too short for this sensor)" : ""}
-                        </option>
-                      );
-                    })}
-                  </select>
-                  {selectedInterval && (
-                    <p className="text-xs text-muted-foreground">
-                      This sensor's effective reporting interval is ~{selectedInterval.seconds}s (
-                      {selectedInterval.source.replace("-", " ")}) — durations shorter than that are disabled
-                      above.
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">Webhook URL (fired)</label>
-                  <Input
-                    value={form.webhookUrl}
-                    onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
-                    placeholder="https://..."
-                    required
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">Webhook URL (resolved, optional)</label>
-                  <Input
-                    value={form.resolvedWebhookUrl}
-                    onChange={(e) => setForm({ ...form, resolvedWebhookUrl: e.target.value })}
-                    placeholder="https://..."
-                  />
-                </div>
-
-                {error && <p className="text-sm text-red-600">{error}</p>}
-
-                <Button type="submit" disabled={saving}>
-                  {saving ? "Creating…" : "Create rule"}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
+          <Button size="sm" disabled={sensors.length === 0} onClick={openCreateDialog}>
+            New Rule
+          </Button>
         )}
       </div>
+
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) {
+            setForm(emptyForm);
+            setEditingId(null);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingId ? "Edit rule" : "New rule"}</DialogTitle>
+          </DialogHeader>
+          <form className="flex flex-col gap-3" onSubmit={submitRule}>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Sensor</label>
+              <select
+                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                value={form.sensorId}
+                onChange={(e) => setForm({ ...form, sensorId: e.target.value, metric: "", durationSeconds: "" })}
+                required
+              >
+                <option value="" disabled>
+                  Select a sensor
+                </option>
+                {sensors.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Metric</label>
+              <select
+                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                value={form.metric}
+                onChange={(e) =>
+                  setForm({ ...form, metric: e.target.value as Sensor["metrics"][number], durationSeconds: "" })
+                }
+                disabled={!selectedSensor}
+                required
+              >
+                <option value="" disabled>
+                  Select a metric
+                </option>
+                {selectedSensor?.metrics.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Condition</label>
+              <select
+                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                value={form.conditionType}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    conditionType: e.target.value as ConditionType,
+                    hysteresisMode: "manual",
+                  })
+                }
+              >
+                <option value="above">is above</option>
+                <option value="below">is below</option>
+                <option value="between">is between</option>
+              </select>
+            </div>
+
+            {form.conditionType === "between" ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">Low bound{unitSuffix && ` (${unitSuffix})`}</label>
+                  <Input
+                    type="number"
+                    value={form.low}
+                    onChange={(e) => setForm({ ...form, low: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">High bound{unitSuffix && ` (${unitSuffix})`}</label>
+                  <Input
+                    type="number"
+                    value={form.high}
+                    onChange={(e) => setForm({ ...form, high: e.target.value })}
+                    required
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-muted-foreground">Threshold{unitSuffix && ` (${unitSuffix})`}</label>
+                <Input
+                  type="number"
+                  value={form.threshold}
+                  onChange={(e) => setForm({ ...form, threshold: e.target.value })}
+                  required
+                />
+              </div>
+            )}
+
+            {form.conditionType === "between" ? (
+              <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                <p className="text-xs text-muted-foreground">
+                  The alarm releases once the reading moves back outside this range by enough to count as
+                  recovered — set that recovery point manually, or let it expand automatically by a percentage.
+                </p>
+                <div className="flex gap-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={form.hysteresisMode === "manual" ? "default" : "outline"}
+                    onClick={() => setForm({ ...form, hysteresisMode: "manual" })}
+                  >
+                    Manual
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={form.hysteresisMode === "auto" ? "default" : "outline"}
+                    onClick={() => setForm({ ...form, hysteresisMode: "auto" })}
+                  >
+                    Auto
+                  </Button>
+                </div>
+                {form.hysteresisMode === "manual" ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">
+                        Releases below{unitSuffix && ` (${unitSuffix})`}
+                      </label>
+                      <Input
+                        type="number"
+                        value={form.clearLow}
+                        onChange={(e) => setForm({ ...form, clearLow: e.target.value })}
+                        placeholder="defaults to low bound"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">
+                        Releases above{unitSuffix && ` (${unitSuffix})`}
+                      </label>
+                      <Input
+                        type="number"
+                        value={form.clearHigh}
+                        onChange={(e) => setForm({ ...form, clearHigh: e.target.value })}
+                        placeholder="defaults to high bound"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground">Release margin (%)</label>
+                    <Input
+                      type="number"
+                      value={form.marginPercent}
+                      onChange={(e) => setForm({ ...form, marginPercent: e.target.value })}
+                      placeholder="e.g. 5"
+                      required
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Expands the range outward by this percent of its width on both sides before it counts as
+                      released.
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-muted-foreground">
+                  Alarm releases at{unitSuffix && ` (${unitSuffix})`} (optional)
+                </label>
+                <Input
+                  type="number"
+                  value={form.clearThreshold}
+                  onChange={(e) => setForm({ ...form, clearThreshold: e.target.value })}
+                  placeholder="defaults to the threshold above"
+                />
+                <p className="text-xs text-muted-foreground">
+                  This is the point at which the alarm releases once fired. If left blank, it releases as soon as
+                  the reading crosses back over the threshold itself.
+                </p>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">
+                Duration (armed for at least this long before firing)
+              </label>
+              <select
+                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                value={form.durationSeconds}
+                onChange={(e) => setForm({ ...form, durationSeconds: Number(e.target.value) })}
+                required
+              >
+                <option value="" disabled>
+                  Select a duration
+                </option>
+                {DURATION_PRESETS.map((p) => {
+                  const tooShort = selectedInterval ? p.seconds < selectedInterval.seconds : false;
+                  return (
+                    <option key={p.seconds} value={p.seconds} disabled={tooShort}>
+                      {p.label}
+                      {tooShort ? " (too short for this sensor)" : ""}
+                    </option>
+                  );
+                })}
+              </select>
+              {selectedInterval && (
+                <p className="text-xs text-muted-foreground">
+                  This sensor's effective reporting interval is ~{selectedInterval.seconds}s (
+                  {selectedInterval.source.replace("-", " ")}) — durations shorter than that are disabled above.
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Webhook URL (fired)</label>
+              <Input
+                value={form.webhookUrl}
+                onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
+                placeholder="https://..."
+                required
+              />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Webhook URL (resolved, optional)</label>
+              <Input
+                value={form.resolvedWebhookUrl}
+                onChange={(e) => setForm({ ...form, resolvedWebhookUrl: e.target.value })}
+                placeholder="https://..."
+              />
+            </div>
+
+            {error && <p className="text-sm text-red-600">{error}</p>}
+
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : editingId ? "Save changes" : "Create rule"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={historyRuleId != null} onOpenChange={(next) => !next && setHistoryRuleId(null)}>
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Webhook history{historyRule ? ` — ${sensorName(historyRule.sensorId)}` : ""}</DialogTitle>
+          </DialogHeader>
+          {historyDeliveries.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No deliveries recorded yet.</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {historyDeliveries.map((d) => (
+                <div key={d.id} className="rounded-md border border-border p-3 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">{d.kind}</Badge>
+                      <Badge variant={deliveryBadgeVariant(d)}>{d.ok ? "ok" : "failed"}</Badge>
+                      {d.status != null && <span className="text-xs text-muted-foreground">HTTP {d.status}</span>}
+                    </div>
+                    <span className="text-xs text-muted-foreground" title={absoluteTimeLabel(d.dispatchedAt)}>
+                      {preciseAgoLabel(d.dispatchedAt)}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate font-mono text-xs text-muted-foreground" title={d.url}>
+                    {d.method} {d.url}
+                  </p>
+                  {d.error && <p className="mt-1 text-xs text-red-600">{d.error}</p>}
+                  {d.responseBodySnippet && (
+                    <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 text-xs">
+                      {d.responseBodySnippet}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {sensors.length === 0 ? (
         <Card>
@@ -477,39 +637,81 @@ export default function RulesPage() {
               <TableHead>Metric</TableHead>
               <TableHead>Condition</TableHead>
               <TableHead>Duration</TableHead>
-              <TableHead>Webhook</TableHead>
               <TableHead>Status</TableHead>
+              {canEdit && <TableHead>Last used</TableHead>}
+              <TableHead>Webhook</TableHead>
               {canEdit && <TableHead />}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rules.map((rule) => (
-              <TableRow key={rule.id}>
-                <TableCell>{sensorName(rule.sensorId)}</TableCell>
-                <TableCell>{rule.metric}</TableCell>
-                <TableCell>
-                  {conditionSummary(
-                    toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
-                    metricUnitSuffix(rule.metric, temperatureUnit)
-                  )}
-                </TableCell>
-                <TableCell>{Math.round(rule.durationSeconds / 60)}m</TableCell>
-                <TableCell className="font-mono text-xs">{rule.webhook.url}</TableCell>
-                <TableCell>
-                  <Badge variant={rule.enabled ? "outline" : "idle"}>{rule.enabled ? "enabled" : "disabled"}</Badge>
-                </TableCell>
-                {canEdit && (
-                  <TableCell className="flex gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => toggleEnabled(rule)}>
-                      {rule.enabled ? "Disable" : "Enable"}
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => deleteRule(rule.id)}>
-                      Delete
-                    </Button>
+            {rules.map((rule) => {
+              const lastDelivery = deliveries[rule.id]?.[0];
+              return (
+                <TableRow key={rule.id}>
+                  <TableCell>{sensorName(rule.sensorId)}</TableCell>
+                  <TableCell>{rule.metric}</TableCell>
+                  <TableCell>
+                    {conditionSummary(
+                      toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
+                      metricUnitSuffix(rule.metric, temperatureUnit)
+                    )}
                   </TableCell>
-                )}
-              </TableRow>
-            ))}
+                  <TableCell>{Math.round(rule.durationSeconds / 60)}m</TableCell>
+                  <TableCell>
+                    <Badge variant={rule.enabled ? "outline" : "idle"}>{rule.enabled ? "enabled" : "disabled"}</Badge>
+                  </TableCell>
+                  {canEdit && (
+                    <TableCell>
+                      {lastDelivery ? (
+                        <button
+                          type="button"
+                          className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                          onClick={() => setHistoryRuleId(rule.id)}
+                          title={absoluteTimeLabel(lastDelivery.dispatchedAt)}
+                        >
+                          <Badge variant={deliveryBadgeVariant(lastDelivery)}>
+                            {preciseAgoLabel(lastDelivery.dispatchedAt)}
+                          </Badge>
+                        </button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">never</span>
+                      )}
+                    </TableCell>
+                  )}
+                  <TableCell>
+                    <span
+                      className="block max-w-[220px] truncate font-mono text-xs text-muted-foreground"
+                      title={rule.webhook.url}
+                    >
+                      {rule.webhook.url}
+                    </span>
+                  </TableCell>
+                  {canEdit && (
+                    <TableCell>
+                      <div className="flex flex-nowrap justify-end gap-1">
+                        <Button variant="outline" size="sm" onClick={() => openEditDialog(rule)}>
+                          Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={testingId === rule.id}
+                          onClick={() => runTest(rule.id)}
+                        >
+                          {testingId === rule.id ? "Testing…" : "Test"}
+                        </Button>
+                        <Button variant="warning" size="sm" onClick={() => toggleEnabled(rule)}>
+                          {rule.enabled ? "Disable" : "Enable"}
+                        </Button>
+                        <Button variant="destructive" size="sm" onClick={() => deleteRule(rule.id)}>
+                          Delete
+                        </Button>
+                      </div>
+                    </TableCell>
+                  )}
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       )}
