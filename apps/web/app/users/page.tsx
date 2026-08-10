@@ -4,6 +4,7 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { canAssignRole, validateUsername } from "@unifi-sensor-latch/shared";
@@ -39,6 +40,7 @@ function GeneratedPasswordBanner({ username, password, onDismiss }: { username: 
 export default function UsersPage() {
   const { user: actor, loading: actorLoading } = useCurrentUser();
   const [users, setUsers] = React.useState<User[]>([]);
+  const [open, setOpen] = React.useState(false);
   const [username, setUsername] = React.useState("");
   const [role, setRole] = React.useState<Role>("user");
   const [error, setError] = React.useState<string | null>(null);
@@ -76,6 +78,7 @@ export default function UsersPage() {
       setGenerated({ username, password: body.generatedPassword });
       setUsername("");
       setRole("user");
+      setOpen(false);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -152,7 +155,47 @@ export default function UsersPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-2xl font-semibold">Users</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Users</h1>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild>
+            <Button size="sm">Add Account</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Add an account</DialogTitle>
+            </DialogHeader>
+            <form className="flex flex-col gap-3" onSubmit={createUser}>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-muted-foreground">Username</label>
+                <Input value={username} onChange={(e) => setUsername(e.target.value)} required autoFocus />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-muted-foreground">Role</label>
+                <select
+                  className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as Role)}
+                >
+                  {grantableRoles.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                A random password is generated and shown once after creation — you relay it, they set their own on
+                first login.
+              </p>
+              {error && <p className="text-sm text-red-600">{error}</p>}
+              <Button type="submit" disabled={saving}>
+                {saving ? "Adding…" : "Add account"}
+              </Button>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
 
       {generated && (
         <GeneratedPasswordBanner
@@ -219,32 +262,6 @@ export default function UsersPage() {
               ))}
             </TableBody>
           </Table>
-
-          <form className="grid gap-3 sm:grid-cols-3 sm:items-end" onSubmit={createUser}>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Username</label>
-              <Input value={username} onChange={(e) => setUsername(e.target.value)} required />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Role</label>
-              <select
-                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                value={role}
-                onChange={(e) => setRole(e.target.value as Role)}
-              >
-                {grantableRoles.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <Button type="submit" disabled={saving}>
-              {saving ? "Adding…" : "Add account (generates a password)"}
-            </Button>
-          </form>
-
-          {error && <p className="text-sm text-red-600">{error}</p>}
         </CardContent>
       </Card>
     </div>

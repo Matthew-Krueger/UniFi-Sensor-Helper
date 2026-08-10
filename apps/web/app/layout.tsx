@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Nav } from "@/components/nav";
-import { PasswordResetGate } from "@/components/password-reset-gate";
+import { SessionGuard } from "@/components/session-guard";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,7 +14,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <PasswordResetGate />
+          <SessionGuard />
           <Nav />
           {/* md:pl-72 reserves space for the drawer, which defaults open
               as a persistent sidebar at that breakpoint — see nav-drawer.tsx.

@@ -92,6 +92,12 @@ export default function SensorsPage() {
     await load();
   }
 
+  // "Refresh" is a manual, on-demand refetch: it re-runs discovery
+  // (picks up any newly added/removed physical sensors — see
+  // SPEC.md section 12) and then reloads the full page state (sensor
+  // list + live status/values), same data the 5s poll would eventually
+  // bring in, just immediately. It only reads and writes sensor metadata
+  // — it never touches latch_state or evaluates any rule.
   async function refresh() {
     setLoading(true);
     setError(null);
@@ -99,8 +105,8 @@ export default function SensorsPage() {
       const res = await fetch("/api/sensors/discover", { method: "POST" });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "discovery failed");
-      setSensors(body.sensors);
       if (body.errors?.length) setError(body.errors.join("; "));
+      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

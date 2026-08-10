@@ -4,6 +4,7 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { ConsoleStatus, ProtectConsole } from "@unifi-sensor-latch/shared";
 import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
@@ -80,6 +81,7 @@ export default function ConsolesPage() {
 
   const [consoles, setConsoles] = React.useState<ProtectConsole[]>([]);
   const [statuses, setStatuses] = React.useState<ConsoleStatus[]>([]);
+  const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
   const [host, setHost] = React.useState("");
   const [apiKey, setApiKey] = React.useState("");
@@ -135,6 +137,8 @@ export default function ConsolesPage() {
       setName("");
       setHost("");
       setApiKey("");
+      setDefaultIntervalSeconds(300);
+      setOpen(false);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -162,7 +166,59 @@ export default function ConsolesPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-2xl font-semibold">Protect Consoles</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Protect Consoles</h1>
+        {canManage && (
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm">Add Console</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add a console</DialogTitle>
+              </DialogHeader>
+              <form className="flex flex-col gap-3" onSubmit={addConsole}>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">Name</label>
+                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Main site NVR" required />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">Host / IP</label>
+                  <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.1" required />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">API key</label>
+                  <Input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="generated at unifi.ui.com"
+                    required
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">Default expected interval</label>
+                  <select
+                    className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                    value={defaultIntervalSeconds}
+                    onChange={(e) => setDefaultIntervalSeconds(Number(e.target.value))}
+                  >
+                    {INTERVAL_PRESETS.map((p) => (
+                      <option key={p.seconds} value={p.seconds}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {error && <p className="text-sm text-red-600">{error}</p>}
+                <Button type="submit" disabled={saving}>
+                  {saving ? "Adding…" : "Add console"}
+                </Button>
+              </form>
+            </DialogContent>
+          </Dialog>
+        )}
+      </div>
 
       {savingMessage && (
         <div className="rounded-md border border-border bg-muted/50 px-4 py-2 text-sm text-muted-foreground">
@@ -175,7 +231,7 @@ export default function ConsolesPage() {
           <CardHeader>
             <CardTitle>No consoles configured yet</CardTitle>
             <CardDescription>
-              {canManage ? "Add one below to start discovering sensors." : "Ask an admin to add one."}
+              {canManage ? "Add one to start discovering sensors." : "Ask an admin to add one."}
             </CardDescription>
           </CardHeader>
           <CardContent />
@@ -231,57 +287,6 @@ export default function ConsolesPage() {
             );
           })}
         </div>
-      )}
-
-      {canManage && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Add a console</CardTitle>
-            <CardDescription>
-              Saves and starts connecting immediately — watch the card above for a live step trace.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="grid gap-3 sm:grid-cols-5 sm:items-end" onSubmit={addConsole}>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Name</label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Main site NVR" required />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Host / IP</label>
-                <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.1" required />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">API key</label>
-                <Input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="generated at unifi.ui.com"
-                  required
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Default expected interval</label>
-                <select
-                  className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                  value={defaultIntervalSeconds}
-                  onChange={(e) => setDefaultIntervalSeconds(Number(e.target.value))}
-                >
-                  {INTERVAL_PRESETS.map((p) => (
-                    <option key={p.seconds} value={p.seconds}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <Button type="submit" disabled={saving}>
-                {saving ? "Adding…" : "Add console"}
-              </Button>
-            </form>
-            {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-          </CardContent>
-        </Card>
       )}
     </div>
   );
