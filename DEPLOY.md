@@ -13,11 +13,11 @@ itself before Next ever handles a request. `next start` is never used.
 ```bash
 sudo useradd --system --create-home --shell /usr/sbin/nologin latch
 sudo usermod -aG docker latch   # or run rootless docker under this user
-sudo mkdir -p /opt/unifi-sensor-latch/{data,certs}
-sudo chown -R latch:latch /opt/unifi-sensor-latch
+sudo mkdir -p /opt/unifi-sensor-helper/{data,certs}
+sudo chown -R latch:latch /opt/unifi-sensor-helper
 ```
 
-Place `.env` and the TLS cert/key under `/opt/unifi-sensor-latch/`, owned by
+Place `.env` and the TLS cert/key under `/opt/unifi-sensor-helper/`, owned by
 `latch:latch`, mode `600`. Nothing in this repo's source or `config`
 generates these for you automatically — see below.
 
@@ -26,7 +26,7 @@ generates these for you automatically — see below.
 ```bash
 openssl req -x509 -newkey rsa:4096 -nodes \
   -keyout certs/key.pem -out certs/cert.pem \
-  -days 825 -subj "/CN=unifi-sensor-latch"
+  -days 825 -subj "/CN=unifi-sensor-helper"
 ```
 
 Regenerate before the 825-day expiry. Never commit `certs/`.
@@ -38,29 +38,17 @@ Mac dev build vs. deploy build differ only in what's targeted:
 - **Mac dev**: `bun install && cd apps/web && bun run server.ts` (runs
   against `next dev`-equivalent via `NODE_ENV` unset) for iteration, no
   Docker required.
-- **Deploy**: `docker build -t unifi-sensor-helper .` for the host
-  machine's own architecture. For a different target architecture (e.g.
-  building on an Apple Silicon Mac for an x86 machine with no shared
-  registry), use `docker buildx` with `--load` to pull the result back
-  into local Docker instead of `docker push`:
-
-  ```bash
-  # Native (fast) — arm64 image, usable directly on this Mac
-  docker buildx build --platform linux/arm64 -t unifi-sensor-helper:arm64 --load .
-
-  # Cross-build (slow — next build runs under QEMU emulation, several
-  # minutes) — amd64 image for the x86 machine
-  docker buildx build --platform linux/amd64 -t unifi-sensor-helper:amd64 --load .
-
-  # Transfer without a registry: save to a tarball, copy it over, load it there
-  docker save unifi-sensor-helper:amd64 -o unifi-sensor-helper-amd64.tar
-  # on the x86 machine:
-  docker load -i unifi-sensor-helper-amd64.tar
-  ```
-
-  If a registry is available, `docker buildx build --platform
-  linux/amd64,linux/arm64 -t <registry>/unifi-sensor-helper:<tag> --push .`
-  builds and pushes a single multi-arch manifest instead — simpler when
+- **Deploy, single architecture**: `docker build -t unifi-sensor-helper .`
+  builds for the host machine's own architecture — nothing else needed.
+- **Deploy, cross-architecture** (e.g. building on an Apple Silicon Mac
+  for an x86 machine with no shared registry): `./scripts/docker-build.sh`
+  builds both `linux/arm64` (native) and `linux/amd64` (cross-built via
+  Docker Desktop's bundled QEMU — no separate setup, just slow: `next
+  build` runs several minutes under emulation), loads the arm64 image into
+  local Docker, and saves the amd64 image to
+  `dist/unifi-sensor-helper-amd64.tar` for `docker load` on the target
+  machine. Pass `--push <registry/image:tag>` instead to build and push a
+  proper multi-arch manifest if a registry is available — simpler when
   it's an option.
 
 **Not `output: 'standalone'`.** Tried it; reverted after live testing
@@ -93,39 +81,91 @@ this repo's graph — `packages/engine/node_modules` (drizzle-orm) and
 copies the whole `deps` stage output (`COPY --from=deps /repo ./`) rather
 than cherry-picking paths, to avoid needing to track that by hand.
 
-## systemd unit
-
-`/etc/systemd/system/unifi-sensor-latch.service`:
-
-```ini
-[Unit]
-Description=UniFi Sensor Helper
-After=docker.service
-Requires=docker.service
-
-[Service]
-User=latch
-Group=latch
-WorkingDirectory=/opt/unifi-sensor-latch
-EnvironmentFile=/opt/unifi-sensor-latch/.env
-ExecStart=/usr/bin/docker compose up
-ExecStop=/usr/bin/docker compose down
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now unifi-sensor-latch
-```
-
 ## Data & volumes
 
 `data/app.db` (SQLite — sensors, latches, latch state, users) and
 `certs/` are bind-mounted into the container per `docker-compose.yml`, not
 baked into the image, so they survive image rebuilds/redeploys.
+
+**If `data/` lives on a network drive** (NFS/CIFS — not required, but
+supported): put a proper entry in `/etc/fstab` with the `_netdev` mount
+option, which tells systemd this is a network filesystem so it gets
+ordered correctly relative to networking and gets its own auto-generated
+mount unit that other units can depend on. Do **not** add `nofail` — that
+makes the mount optional at boot, which is the opposite of what you want
+here (silently starting with an empty *local* directory instead of the
+real data volume would be a much worse failure mode than the service
+simply not starting).
+
+```fstab
+# NFS example
+nas.local:/export/unifi-sensor-helper  /opt/unifi-sensor-helper/data  nfs   _netdev,x-systemd.mount-timeout=30  0  0
+
+# CIFS/SMB example
+//nas.local/unifi-sensor-helper  /opt/unifi-sensor-helper/data  cifs  credentials=/etc/unifi-sensor-helper-cifs,_netdev,x-systemd.mount-timeout=30  0  0
+```
+
+```bash
+sudo mkdir -p /opt/unifi-sensor-helper/data
+sudo systemctl daemon-reload   # picks up the new fstab entry as a .mount unit
+sudo mount /opt/unifi-sensor-helper/data   # verify it mounts cleanly before moving on
+```
+
+## systemd unit
+
+`/etc/systemd/system/unifi-sensor-helper.service`:
+
+```ini
+[Unit]
+Description=UniFi Sensor Helper
+# network-online.target: the app itself needs real network access (to
+# reach the Protect console), not just the loopback interface being up.
+# remote-fs.target: the standard systemd target that's reached once every
+# _netdev filesystem in /etc/fstab (NFS/CIFS/etc.) has finished mounting —
+# belt-and-suspenders alongside RequiresMountsFor below, which ties this
+# unit to the *specific* mount backing the data directory rather than
+# "all network filesystems, whatever they are."
+After=network-online.target remote-fs.target docker.service
+Wants=network-online.target
+Requires=docker.service
+# Ties this unit's start ordering AND a hard dependency to whatever mount
+# unit covers this exact path — systemd resolves that automatically from
+# /etc/fstab (or a StorageOnDemand-style local disk, if data/ isn't on a
+# network drive; this line is harmless either way). If the mount fails,
+# this service fails to start instead of silently writing to an empty
+# local directory.
+RequiresMountsFor=/opt/unifi-sensor-helper/data
+
+[Service]
+User=latch
+Group=latch
+WorkingDirectory=/opt/unifi-sensor-helper
+EnvironmentFile=/opt/unifi-sensor-helper/.env
+# Defense in depth on top of RequiresMountsFor above — if this directory
+# is supposed to be a mount point and isn't actually mounted (e.g. an
+# operator error in fstab that RequiresMountsFor's dependency resolution
+# didn't catch), fail loudly here rather than let the container start and
+# write app.db to a local path that looks right but isn't.
+ExecStartPre=/usr/bin/mountpoint -q /opt/unifi-sensor-helper/data
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+If `data/` is a plain local directory (not a network mount), drop the
+`ExecStartPre` line — `mountpoint -q` only succeeds for an actual mount
+point, and a local directory that's just a directory will fail it.
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now unifi-sensor-helper
+sudo systemctl status unifi-sensor-helper   # confirm it actually came up
+journalctl -u unifi-sensor-helper -f        # tail logs
+```
 
 ## Node/Bun version parity
 
