@@ -3,6 +3,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { Nav } from "@/components/nav";
 import { SessionGuard } from "@/components/session-guard";
 import { CurrentUserProvider } from "@/lib/useCurrentUser";
+import { getSessionUser } from "@/lib/auth";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -10,13 +11,14 @@ export const metadata: Metadata = {
   description: "Hysteresis latch layer between UniFi Protect sensors and webhooks",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const initialUser = await getSessionUser();
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           <div className="app-backdrop" aria-hidden="true" />
-          <CurrentUserProvider>
+          <CurrentUserProvider initialUser={initialUser}>
             <SessionGuard />
             <Nav />
             {/* md:pl-72 reserves space for the drawer, which defaults open

@@ -32,9 +32,22 @@ const CurrentUserContext = React.createContext<CurrentUserState | null>(null);
 
 const POLL_MS = 5000;
 
-export function CurrentUserProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = React.useState<User | null>(null);
-  const [loading, setLoading] = React.useState(true);
+// initialUser comes from a server-side session lookup done in
+// app/layout.tsx (a Server Component) before any HTML is sent — so the
+// very first paint already has the right role-gated UI, instead of
+// starting from `null` and popping in buttons/badges a moment later once
+// the first poll resolves. It's already the ground truth (same session
+// cookie, same lookup requireRole uses), not a guess, so loading starts
+// false rather than waiting on a redundant first poll.
+export function CurrentUserProvider({
+  children,
+  initialUser,
+}: {
+  children: React.ReactNode;
+  initialUser: User | null;
+}) {
+  const [user, setUser] = React.useState<User | null>(initialUser);
+  const [loading, setLoading] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -50,7 +63,6 @@ export function CurrentUserProvider({ children }: { children: React.ReactNode })
         });
     }
 
-    poll();
     const id = setInterval(poll, POLL_MS);
     return () => {
       cancelled = true;

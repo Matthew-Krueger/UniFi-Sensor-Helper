@@ -7,26 +7,18 @@ import {
   consoleNameSchema,
   consoleWebhookIdSchema,
   intervalSecondsSchema,
-  maskSecret,
 } from "@unifi-sensor-latch/shared";
 import type { ProtectConsole } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
+import { redactConsole } from "@/lib/consoleRedaction";
 
 const DEFAULT_INTERVAL_SECONDS = 300; // 5 minutes — matches schema.ts's column default
-
-// Protect console connections (host + API key) — user-editable in SQLite,
-// not .env, since a site can have more than one console (see schema.ts).
-// apiKey is secret-bearing: never echoed back in full, same rule as
-// webhook URLs (CLAUDE.md obfuscation).
-function redact(console_: ProtectConsole) {
-  return { ...console_, apiKey: maskSecret(console_.apiKey) };
-}
 
 export async function GET() {
   const actor = await requireRole("user");
   if (actor instanceof NextResponse) return actor;
   const engine = getEngine();
-  const consoles = engine.config.listProtectConsoles().map(redact);
+  const consoles = engine.config.listProtectConsoles().map(redactConsole);
   const statuses = engine.listConsoleStatuses();
   return NextResponse.json({ consoles, statuses });
 }
@@ -88,5 +80,5 @@ export async function POST(req: NextRequest) {
     console.error("[api/consoles] connectConsole failed:", err);
   });
 
-  return NextResponse.json({ console: redact(console_) }, { status: 201 });
+  return NextResponse.json({ console: redactConsole(console_) }, { status: 201 });
 }
