@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ProtectConsole, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
-import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
+import { DURATION_PRESETS, effectiveInterval } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
 import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
@@ -22,6 +22,36 @@ function formatInterval(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   return `${Math.round(seconds / 3600)}h`;
+}
+
+// Color reflects staleness *relative to the sensor's own effective
+// interval* (same observed > sensor-override > console-default priority
+// used for rule validation — see packages/shared/src/interval.ts), never
+// how recently the browser last polled. useNowTick (called in the page
+// component) re-renders this every second regardless of the 5s data-poll
+// cadence, specifically so a client that hasn't checked in for a few
+// seconds can never be the reason something looks stale — the elapsed
+// time is always computed against the real clock at render time, not
+// against when data last arrived over the wire.
+const GOOD_MULTIPLIER = 1.5; // within/close to the expected window
+const WARN_MULTIPLIER = 3; // "delayed" — user's explicit 3x threshold
+
+function reportingBadge(
+  sensor: Sensor,
+  status: SensorStatus | undefined,
+  defaultIntervalSeconds: number
+): { variant: "idle" | "good" | "armed" | "fired"; label: string } {
+  if (!status?.lastSeenAt) return { variant: "idle", label: "no data yet" };
+
+  const metricIntervals = sensor.metrics.map(
+    (m) => effectiveInterval(status.observedIntervalSeconds[m], sensor.expectedIntervalSeconds, defaultIntervalSeconds).seconds
+  );
+  const expectedSeconds = metricIntervals.length > 0 ? Math.min(...metricIntervals) : defaultIntervalSeconds;
+  const elapsedSeconds = (Date.now() - status.lastSeenAt) / 1000;
+
+  if (elapsedSeconds <= expectedSeconds * GOOD_MULTIPLIER) return { variant: "good", label: "reporting" };
+  if (elapsedSeconds <= expectedSeconds * WARN_MULTIPLIER) return { variant: "armed", label: "delayed" };
+  return { variant: "fired", label: "overdue" };
 }
 
 function formatValue(metric: string, value: number): string {
@@ -163,14 +193,14 @@ export default function SensorsPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {sensors.map((sensor) => {
             const status = statuses.find((s) => s.sensorId === sensor.id);
+            const console_ = consoles.find((c) => c.id === sensor.consoleId);
+            const badge = reportingBadge(sensor, status, console_?.defaultIntervalSeconds ?? 300);
             return (
               <Card key={sensor.id}>
                 <CardHeader>
                   <div className="flex items-center justify-between gap-2">
                     <CardTitle className="text-base">{sensor.name}</CardTitle>
-                    <Badge variant={status?.lastSeenAt ? "outline" : "idle"}>
-                      {status?.lastSeenAt ? "reporting" : "no data yet"}
-                    </Badge>
+                    <Badge variant={badge.variant}>{badge.label}</Badge>
                   </div>
                   <CardDescription
                     title={status?.lastSeenAt ? absoluteTimeLabel(status.lastSeenAt) : undefined}
