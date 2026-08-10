@@ -19,7 +19,7 @@ export const DURATION_PRESETS: { label: string; seconds: number }[] = [
   { label: "1 hour", seconds: 3600 },
 ];
 
-export type IntervalSource = "observed" | "sensor-override" | "console-default";
+export type IntervalSource = "observed" | "console-default";
 
 export interface EffectiveInterval {
   seconds: number;
@@ -27,16 +27,21 @@ export interface EffectiveInterval {
 }
 
 // Priority: a real observed interval (measured from actual reading gaps —
-// see SensorStatus) beats a manually-set expectation every time, because
-// it's ground truth rather than a guess. Falls back to the per-sensor
-// override, then the owning console's default.
+// see SensorStatus) beats the console default, because it's ground truth
+// rather than a guess. There used to be a middle "per-sensor override"
+// tier here, removed by project decision: sensors are always fetched in
+// one bulk GET /v1/sensors call per console (confirmed live — there's no
+// way to poll one sensor faster than another, and no API-exposed
+// "reporting interval" field to sync a per-sensor override to even if
+// there were), so a per-sensor interval knob didn't correspond to
+// anything the app could actually act on — it only ever affected rule
+// validation math, not real polling behavior, which was confusing more
+// than useful.
 export function effectiveInterval(
   observedSeconds: number | null | undefined,
-  sensorOverrideSeconds: number | null | undefined,
   consoleDefaultSeconds: number
 ): EffectiveInterval {
   if (observedSeconds != null) return { seconds: observedSeconds, source: "observed" };
-  if (sensorOverrideSeconds != null) return { seconds: sensorOverrideSeconds, source: "sensor-override" };
   return { seconds: consoleDefaultSeconds, source: "console-default" };
 }
 
@@ -52,7 +57,6 @@ function formatSeconds(seconds: number): string {
 
 const SOURCE_LABEL: Record<IntervalSource, string> = {
   observed: "the interval observed from this sensor's real readings",
-  "sensor-override": "this sensor's configured expected interval",
   "console-default": "the console's default expected interval",
 };
 

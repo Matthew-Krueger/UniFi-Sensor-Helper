@@ -1,0 +1,1 @@
+ALTER TABLE `sensors` DROP COLUMN `expected_interval_seconds`;

@@ -24,13 +24,14 @@ function formatInterval(seconds: number): string {
   return `${Math.round(seconds / 3600)}h`;
 }
 
-// Color reflects staleness *relative to the sensor's own effective
-// interval* (same observed > sensor-override > console-default priority
-// used for rule validation — see packages/shared/src/interval.ts), never
-// how recently the browser last polled. useNowTick (called in the page
-// component) re-renders this every second regardless of the 5s data-poll
-// cadence, specifically so a client that hasn't checked in for a few
-// seconds can never be the reason something looks stale — the elapsed
+// Color reflects staleness *relative to the owning console's effective
+// interval* (observed > console-default — see interval.ts). Sensors are
+// always fetched in one bulk call per console, so "expected cadence" is
+// inherently a console-level thing, not per-sensor; the badge follows
+// the console it's on, not a per-sensor setting. useNowTick (called in
+// the page component) re-renders this every second regardless of the 5s
+// data-poll cadence, specifically so a client that hasn't checked in for
+// a few seconds can never be the reason something looks stale — elapsed
 // time is always computed against the real clock at render time, not
 // against when data last arrived over the wire.
 const GOOD_MULTIPLIER = 1.5; // within/close to the expected window
@@ -43,9 +44,7 @@ function reportingBadge(
 ): { variant: "idle" | "good" | "armed" | "fired"; label: string } {
   if (!status?.lastSeenAt) return { variant: "idle", label: "no data yet" };
 
-  const metricIntervals = sensor.metrics.map(
-    (m) => effectiveInterval(status.observedIntervalSeconds[m], sensor.expectedIntervalSeconds, defaultIntervalSeconds).seconds
-  );
+  const metricIntervals = sensor.metrics.map((m) => effectiveInterval(status.observedIntervalSeconds[m], defaultIntervalSeconds).seconds);
   const expectedSeconds = metricIntervals.length > 0 ? Math.min(...metricIntervals) : defaultIntervalSeconds;
   const elapsedSeconds = (Date.now() - status.lastSeenAt) / 1000;
 
@@ -107,15 +106,6 @@ export default function SensorsPage() {
     }, POLL_MS);
     return () => clearInterval(id);
   }, [load]);
-
-  async function setExpectedInterval(sensorId: string, seconds: number | null) {
-    await fetch(`/api/sensors/${sensorId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expectedIntervalSeconds: seconds }),
-    });
-    await load();
-  }
 
   // "Refresh" is a manual, on-demand refetch: it re-runs discovery
   // (picks up any newly added/removed physical sensors — see
@@ -202,11 +192,10 @@ export default function SensorsPage() {
                     <CardTitle className="text-base">{sensor.name}</CardTitle>
                     <Badge variant={badge.variant}>{badge.label}</Badge>
                   </div>
-                  <CardDescription
-                    title={status?.lastSeenAt ? absoluteTimeLabel(status.lastSeenAt) : undefined}
-                  >
+                  <CardDescription title={status?.lastSeenAt ? absoluteTimeLabel(status.lastSeenAt) : undefined}>
                     Last contacted: {preciseAgoLabel(status?.lastSeenAt ?? null)}
                   </CardDescription>
+                  <p className="text-xs text-muted-foreground">Console: {console_?.name ?? "unknown"}</p>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-2">
                   {sensor.metrics.length === 0 ? (
@@ -230,25 +219,6 @@ export default function SensorsPage() {
                           </div>
                         );
                       })}
-                    </div>
-                  )}
-                  {canDiscover && (
-                    <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                      <span>Expected interval override:</span>
-                      <select
-                        className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground"
-                        value={sensor.expectedIntervalSeconds ?? ""}
-                        onChange={(e) =>
-                          setExpectedInterval(sensor.id, e.target.value === "" ? null : Number(e.target.value))
-                        }
-                      >
-                        <option value="">Use console default</option>
-                        {INTERVAL_PRESETS.map((p) => (
-                          <option key={p.seconds} value={p.seconds}>
-                            {p.label}
-                          </option>
-                        ))}
-                      </select>
                     </div>
                   )}
                 </CardContent>

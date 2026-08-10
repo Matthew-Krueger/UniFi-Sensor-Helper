@@ -7,11 +7,6 @@ export interface Sensor {
   consoleId: string; // which ProtectConsole this sensor was discovered on
   name: string; // friendly name, editable in UI
   metrics: Metric[]; // discovered from the API
-  // Manual fallback for how often we expect this sensor to report, used
-  // only until we've observed enough real readings to measure it (see
-  // SensorStatus.observedIntervalSeconds) — null means "use the console
-  // default." See packages/shared/src/interval.ts.
-  expectedIntervalSeconds: number | null;
 }
 
 // A UniFi Protect console this deployment talks to. Stored in SQLite, not
@@ -106,8 +101,7 @@ export interface SensorStatus {
   // metric, measured from real timestamps — not configuration, ground
   // truth. Present once we've seen ≥2 readings for that metric. See
   // singleton.ts's ingest() for how it's computed and interval.ts for how
-  // it's used (takes priority over Sensor.expectedIntervalSeconds and the
-  // console default).
+  // it's used (takes priority over the console default).
   observedIntervalSeconds: Partial<Record<Metric, number>>;
 }
 

@@ -75,10 +75,10 @@ export default function RulesPage() {
   }
 
   // Same priority as the server-side check (see /api/latches's route) —
-  // observed interval (real measured gap) beats the sensor's manual
-  // override, which beats the owning console's default. Used only to
-  // grey out too-short duration presets before submit; the server-side
-  // check in /api/latches is the actual gate (CLAUDE.md trust boundaries).
+  // observed interval (real measured gap) beats the owning console's
+  // default. Used only to grey out too-short duration presets before
+  // submit; the server-side check in /api/latches is the actual gate
+  // (CLAUDE.md trust boundaries).
   const selectedInterval = React.useMemo(() => {
     if (!selectedSensor || !form.metric) return null;
     const console_ = consoles.find((c) => c.id === selectedSensor.consoleId);
@@ -86,7 +86,7 @@ export default function RulesPage() {
     const observed = sensorStatuses.find((s) => s.sensorId === selectedSensor.id)?.observedIntervalSeconds[
       form.metric
     ];
-    return effectiveInterval(observed, selectedSensor.expectedIntervalSeconds, console_.defaultIntervalSeconds);
+    return effectiveInterval(observed, console_.defaultIntervalSeconds);
   }, [selectedSensor, form.metric, consoles, sensorStatuses]);
 
   async function createRule(e: React.FormEvent) {

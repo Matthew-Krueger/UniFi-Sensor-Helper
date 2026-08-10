@@ -10,13 +10,7 @@ import { latches, latchState, protectConsoles, sensors } from "./schema";
 // layer originally described in SPEC.md section 6.
 
 function sensorFromRow(row: typeof schema.sensors.$inferSelect): Sensor {
-  return {
-    id: row.id,
-    consoleId: row.consoleId,
-    name: row.name,
-    metrics: JSON.parse(row.discoveredMetrics),
-    expectedIntervalSeconds: row.expectedIntervalSeconds,
-  };
+  return { id: row.id, consoleId: row.consoleId, name: row.name, metrics: JSON.parse(row.discoveredMetrics) };
 }
 
 function consoleFromRow(row: typeof schema.protectConsoles.$inferSelect): ProtectConsole {
@@ -62,10 +56,6 @@ export class ConfigStore {
     return this.db.select().from(sensors).orderBy(sensors.name).all().map(sensorFromRow);
   }
 
-  // Discovery's write path — deliberately does NOT overwrite
-  // expectedIntervalSeconds on conflict, so re-running discovery never
-  // clobbers an admin-set per-sensor interval override. Use
-  // setSensorExpectedInterval to change that field.
   upsertSensor(sensor: Sensor): void {
     this.db
       .insert(sensors)
@@ -74,17 +64,12 @@ export class ConfigStore {
         consoleId: sensor.consoleId,
         name: sensor.name,
         discoveredMetrics: JSON.stringify(sensor.metrics),
-        expectedIntervalSeconds: sensor.expectedIntervalSeconds,
       })
       .onConflictDoUpdate({
         target: sensors.id,
         set: { consoleId: sensor.consoleId, name: sensor.name, discoveredMetrics: JSON.stringify(sensor.metrics) },
       })
       .run();
-  }
-
-  setSensorExpectedInterval(sensorId: string, seconds: number | null): void {
-    this.db.update(sensors).set({ expectedIntervalSeconds: seconds }).where(eq(sensors.id, sensorId)).run();
   }
 
   listProtectConsoles(): ProtectConsole[] {

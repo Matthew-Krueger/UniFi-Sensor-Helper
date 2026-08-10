@@ -34,13 +34,7 @@ describe("ConfigStore latch state persistence", () => {
   test("latches and sensors round-trip through upsert", () => {
     const store = freshStore();
 
-    store.upsertSensor({
-      id: "sensor-1",
-      consoleId: "console-1",
-      name: "Walk-in Freezer",
-      metrics: ["temperature"],
-      expectedIntervalSeconds: null,
-    });
+    store.upsertSensor({ id: "sensor-1", consoleId: "console-1", name: "Walk-in Freezer", metrics: ["temperature"] });
     store.upsertLatch({
       id: "freezer-temp",
       sensorId: "sensor-1",

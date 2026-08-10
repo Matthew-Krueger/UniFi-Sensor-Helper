@@ -112,12 +112,14 @@ Sensor {
   id: string            // Protect device id
   name: string           // friendly name, editable in UI
   metrics: Metric[]      // discovered from the API, see section 8
-  expectedIntervalSeconds: number | null
-    // Manual fallback for how often this sensor is expected to report —
-    // null means "use the owning console's default." Only used until the
-    // engine has observed enough real readings to measure the actual
-    // interval itself (see SensorStatus below); observed data always
-    // wins once available. See "Rule duration validation" below.
+  // No per-sensor expected-interval field — removed by project decision.
+  // Sensors are always fetched in one bulk GET /v1/sensors call per
+  // console (confirmed live — there is no way to poll one sensor faster
+  // than another, and no API-exposed "reporting interval" field to sync
+  // a per-sensor value to even if there were), so a per-sensor interval
+  // never corresponded to real polling behavior — only to rule-
+  // validation math, which was confusing more than useful. See "Rule
+  // duration validation" below.
 }
 
 Metric = "lux" | "temperature" | "humidity" | "leak" | ...
@@ -135,7 +137,7 @@ SensorStatus {                     // in-memory, not persisted
   observedIntervalSeconds: Partial<Record<Metric, number>>
     // Rolling average (EMA) of real gaps between successive readings of
     // each metric — ground truth, not configuration. Takes priority over
-    // Sensor.expectedIntervalSeconds and ProtectConsole.defaultIntervalSeconds.
+    // ProtectConsole.defaultIntervalSeconds.
 }
 
 Latch {
@@ -196,11 +198,10 @@ resolved in this priority order (`packages/shared/src/interval.ts`):
 1. **Observed** — a rolling average measured from real reading gaps
    (`SensorStatus.observedIntervalSeconds`). Ground truth once available;
    always wins.
-2. **Sensor override** — `Sensor.expectedIntervalSeconds`, set on the
-   Sensors page. Manual fallback for a sensor with no observed data yet
-   (just discovered) or a known interval an operator wants to force.
-3. **Console default** — `ProtectConsole.defaultIntervalSeconds` (300s
-   default), set on the Consoles page. Last resort.
+2. **Console default** — `ProtectConsole.defaultIntervalSeconds` (300s
+   default), set on the Consoles page. Fallback for a sensor with no
+   observed data yet. (A per-sensor override tier used to sit between
+   these two; removed — see the Sensor domain type above for why.)
 
 The Rules page's duration field is a fixed preset dropdown — 30s / 1m /
 5m / 10m / 15m / 30m / 1h, matching Protect's own Alarm Manager duration

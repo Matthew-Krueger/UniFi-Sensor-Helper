@@ -149,11 +149,7 @@ export class LatchEngine {
     const now = Date.now();
     for (const r of raw) {
       const sensor = rawSensorToSensor(r);
-      // expectedIntervalSeconds: null here is only the *insert* default
-      // for a brand-new sensor row — upsertSensor deliberately never
-      // overwrites it on conflict, so a previously-set override survives
-      // repeated discovery runs.
-      this.config.upsertSensor({ ...sensor, consoleId: consoleConfig.id, expectedIntervalSeconds: null });
+      this.config.upsertSensor({ ...sensor, consoleId: consoleConfig.id });
 
       for (const reading of rawSensorToReadings(r.id, r, now)) {
         this.ingest(reading);
@@ -201,11 +197,11 @@ export class LatchEngine {
     return [...this.sensorStatuses.values()];
   }
 
-  // Resolves observed → sensor override → console default for a given
-  // (sensorId, metric) — the one place Rule duration validation (POST/
-  // PATCH /api/latches) and the Rules page's duration-preset greying
-  // both go for "what interval should this duration be checked against."
-  // Returns null only if the sensor or its owning console can't be found.
+  // Resolves observed → console default for a given (sensorId, metric) —
+  // the one place Rule duration validation (POST/PATCH /api/latches) and
+  // the Rules page's duration-preset greying both go for "what interval
+  // should this duration be checked against." Returns null only if the
+  // sensor or its owning console can't be found.
   getEffectiveInterval(sensorId: string, metric: Metric): EffectiveInterval | null {
     const sensor = this.config.listSensors().find((s) => s.id === sensorId);
     if (!sensor) return null;
@@ -213,7 +209,7 @@ export class LatchEngine {
     if (!console_) return null;
 
     const observed = this.sensorStatuses.get(sensorId)?.observedIntervalSeconds[metric];
-    return effectiveInterval(observed, sensor.expectedIntervalSeconds, console_.defaultIntervalSeconds);
+    return effectiveInterval(observed, console_.defaultIntervalSeconds);
   }
 
   // Ingest entrypoint — called for every reading, whether from a live
