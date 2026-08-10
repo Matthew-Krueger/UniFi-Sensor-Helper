@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
 import type { ProtectConsole } from "@unifi-sensor-latch/shared";
 import {
+  consoleApiBaseUrlOverrideSchema,
   consoleApiKeySchema,
   consoleHostSchema,
   consoleNameSchema,
@@ -64,6 +65,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (!webhookId.success) return NextResponse.json({ error: webhookId.error.issues[0]?.message }, { status: 400 });
       updated.defaultWebhookId = webhookId.data;
     }
+  }
+
+  if (body.apiBaseUrlOverride !== undefined) {
+    if (body.apiBaseUrlOverride === null || body.apiBaseUrlOverride === "") {
+      updated.apiBaseUrlOverride = null;
+    } else {
+      const override = consoleApiBaseUrlOverrideSchema.safeParse(body.apiBaseUrlOverride);
+      if (!override.success) return NextResponse.json({ error: override.error.issues[0]?.message }, { status: 400 });
+      updated.apiBaseUrlOverride = override.data;
+    }
+    connectivityAffected = true;
   }
 
   engine.config.upsertProtectConsole(updated);

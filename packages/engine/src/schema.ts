@@ -84,6 +84,14 @@ export const protectConsoles = sqliteTable("protect_consoles", {
   name: text("name").notNull(),
   host: text("host").notNull(),
   apiKey: text("api_key").notNull(),
+  // Optional override for the base URL normally derived from `host` as
+  // `https://{host}/proxy/protect/integration` (see protect.ts's baseUrl).
+  // Exists for the rare case of talking to a console through something
+  // other than a direct LAN path — e.g. UniFi's remote/cloud API base —
+  // where the request needs to go somewhere other than the console's own
+  // host. Null (the default) means "derive it from host" like today; most
+  // deployments never need to touch this.
+  apiBaseUrlOverride: text("api_base_url_override"),
   // Expected reporting interval (seconds) for sensors on this console —
   // also the cadence of the periodic re-poll (see singleton.ts's
   // connectConsole; sensors are always fetched in one bulk GET

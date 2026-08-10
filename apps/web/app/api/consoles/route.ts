@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
 import {
+  consoleApiBaseUrlOverrideSchema,
   consoleApiKeySchema,
   consoleHostSchema,
   consoleNameSchema,
@@ -56,6 +57,13 @@ export async function POST(req: NextRequest) {
     defaultWebhookId = webhookId.data;
   }
 
+  let apiBaseUrlOverride: string | null = null;
+  if (body.apiBaseUrlOverride) {
+    const override = consoleApiBaseUrlOverrideSchema.safeParse(body.apiBaseUrlOverride);
+    if (!override.success) return NextResponse.json({ error: override.error.issues[0]?.message }, { status: 400 });
+    apiBaseUrlOverride = override.data;
+  }
+
   const engine = getEngine();
   const id: string = typeof body.id === "string" && body.id ? body.id : crypto.randomUUID();
   const console_: ProtectConsole = {
@@ -63,6 +71,7 @@ export async function POST(req: NextRequest) {
     name: name.data,
     host: host.data,
     apiKey: apiKey.data,
+    apiBaseUrlOverride,
     defaultIntervalSeconds,
     defaultWebhookId,
     createdAt: Date.now(),

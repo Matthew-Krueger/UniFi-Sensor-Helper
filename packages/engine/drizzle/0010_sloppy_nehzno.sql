@@ -1,0 +1,1 @@
+ALTER TABLE `protect_consoles` ADD `api_base_url_override` text;

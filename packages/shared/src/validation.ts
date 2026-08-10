@@ -36,6 +36,16 @@ export const consoleApiKeySchema = z.string().min(1).max(512, "API key must be 5
 // webhook" rule (SPEC.md section 7) — no format Protect itself enforces,
 // just a length bound.
 export const consoleWebhookIdSchema = z.string().min(1).max(256, "Webhook ID must be 256 characters or fewer");
+// Optional escape hatch (ProtectConsole.apiBaseUrlOverride) — most
+// deployments never set this, so it's validated loosely: must look like an
+// http(s) base URL if present at all, no format requirement beyond that.
+export const consoleApiBaseUrlOverrideSchema = z
+  .string()
+  .max(512, "API base override must be 512 characters or fewer")
+  .regex(/^https?:\/\/.+/i, "API base override must start with http:// or https://");
+// Custom webhook body template (WebhookTarget.bodyTemplate) — arbitrary
+// user-authored text, bounded so it can't bloat the latches table.
+export const webhookBodyTemplateSchema = z.string().max(4000, "Body template must be 4000 characters or fewer");
 
 // Expected-interval fields (console default, per-sensor override) — 10s
 // floor rules out an accidentally-entered value that'd make every rule

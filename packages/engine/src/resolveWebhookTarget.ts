@@ -27,11 +27,15 @@ export function resolveWebhookTarget(target: WebhookTarget, config: ConfigStore)
   }
 
   return {
-    url: buildConsoleWebhookUrl(console_.host, target.webhookId),
+    url: buildConsoleWebhookUrl(console_.host, target.webhookId, console_.apiBaseUrlOverride),
     method: "POST",
     headers: { "X-API-Key": console_.apiKey, Accept: "application/json" },
     // Protect consoles run a self-signed cert by default — see
-    // ResolvedWebhookTarget's doc comment.
-    insecure: true,
+    // ResolvedWebhookTarget's doc comment. Only true when there's no
+    // apiBaseUrlOverride: an override means we're not talking to the
+    // console directly anymore (e.g. a remote/cloud API base with a real,
+    // publicly-trusted cert), so cert validation should run for real there
+    // — see protect.ts's tlsOptionsFor.
+    insecure: !console_.apiBaseUrlOverride,
   };
 }

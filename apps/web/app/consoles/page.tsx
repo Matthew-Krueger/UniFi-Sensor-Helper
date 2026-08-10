@@ -82,6 +82,7 @@ export default function ConsolesPage() {
   const [apiKey, setApiKey] = React.useState("");
   const [defaultIntervalSeconds, setDefaultIntervalSeconds] = React.useState(300);
   const [defaultWebhookId, setDefaultWebhookId] = React.useState("");
+  const [apiBaseUrlOverride, setApiBaseUrlOverride] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [savingMessage, setSavingMessage] = React.useState<string | null>(null);
@@ -123,6 +124,7 @@ export default function ConsolesPage() {
     setApiKey("");
     setDefaultIntervalSeconds(300);
     setDefaultWebhookId("");
+    setApiBaseUrlOverride("");
   }
 
   function openAddDialog() {
@@ -138,6 +140,7 @@ export default function ConsolesPage() {
     setApiKey(""); // never round-tripped — see PATCH /api/consoles/[id]'s comment
     setDefaultIntervalSeconds(c.defaultIntervalSeconds);
     setDefaultWebhookId(c.defaultWebhookId ?? "");
+    setApiBaseUrlOverride(c.apiBaseUrlOverride ?? "");
     setEditingId(c.id);
     setError(null);
     setOpen(true);
@@ -153,12 +156,12 @@ export default function ConsolesPage() {
         ? await fetch(`/api/consoles/${editingId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, host, apiKey, defaultIntervalSeconds, defaultWebhookId }),
+            body: JSON.stringify({ name, host, apiKey, defaultIntervalSeconds, defaultWebhookId, apiBaseUrlOverride }),
           })
         : await fetch("/api/consoles", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, host, apiKey, defaultIntervalSeconds, defaultWebhookId }),
+            body: JSON.stringify({ name, host, apiKey, defaultIntervalSeconds, defaultWebhookId, apiBaseUrlOverride }),
           });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "failed to save console");
@@ -261,9 +264,23 @@ export default function ConsolesPage() {
               </p>
               {host && defaultWebhookId && (
                 <p className="break-all font-mono text-xs text-muted-foreground">
-                  {buildConsoleWebhookUrl(host, defaultWebhookId)}
+                  {buildConsoleWebhookUrl(host, defaultWebhookId, apiBaseUrlOverride || null)}
                 </p>
               )}
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">API base override (optional)</label>
+              <Input
+                value={apiBaseUrlOverride}
+                onChange={(e) => setApiBaseUrlOverride(e.target.value)}
+                placeholder="e.g. https://unifi.ui.com/proxy/consoles/<id>/protect/integration"
+              />
+              <p className="text-xs text-muted-foreground">
+                You almost certainly don't need this — by default the app talks to the console directly at{" "}
+                <code className="font-mono">https://{host || "&lt;host&gt;"}/proxy/protect/integration</code>. Set
+                this only if you need to reach the console through something else instead, e.g. UniFi's
+                remote/cloud API base. Leave blank to use the default.
+              </p>
             </div>
             {error && <p className="text-sm text-red-600">{error}</p>}
             <Button type="submit" disabled={saving}>
@@ -306,6 +323,11 @@ export default function ConsolesPage() {
                 </CardHeader>
                 <CardContent className="flex flex-col gap-2 text-sm text-muted-foreground">
                   <div>API key: <span className="font-mono">{c.apiKey}</span></div>
+                  {c.apiBaseUrlOverride && (
+                    <div className="break-all">
+                      API base override: <span className="font-mono text-xs">{c.apiBaseUrlOverride}</span>
+                    </div>
+                  )}
                   <div>{status?.sensorCount ?? 0} sensor{status?.sensorCount === 1 ? "" : "s"} discovered</div>
                   <div title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined}>
                     Last contacted: {preciseAgoLabel(status?.lastEventAt ?? null)}

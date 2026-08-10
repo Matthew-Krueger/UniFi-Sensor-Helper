@@ -250,6 +250,13 @@ can't know a sensor's *true* worst-case interval in advance, only its
 recent history) — if a rule fires spuriously, the operator remedy is to
 increase that rule's `durationSeconds` to add margin above the observed/
 default interval, not to treat it as a bug in the arm/clear logic itself.
+The Rules page hints at this proactively: a duration under 2x the
+effective interval gets a non-blocking amber note suggesting more margin,
+since 1x only guarantees one more reading before firing (a single flaky
+sample at that edge is enough to trip it), while 2x guarantees at least
+two independent confirming readings. This is advisory only, not a
+validation floor — a short duration can be a deliberate, informed choice
+on a sensor known to be reliable, so it's never rejected, only flagged.
 
 ## 5. Architecture
 

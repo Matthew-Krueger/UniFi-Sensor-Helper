@@ -1,4 +1,5 @@
 import type { Metric, Reading, Sensor } from "@unifi-sensor-latch/shared";
+import { protectApiBase } from "@unifi-sensor-latch/shared";
 
 // UniFi Protect integration API client — see API_NOTES.md for the endpoints
 // this relies on and how each was confirmed. Hand-rolled rather than an
@@ -25,10 +26,21 @@ export interface RawSensor {
 export interface ProtectConfig {
   host: string;
   apiKey: string;
+  // See ProtectConsole.apiBaseUrlOverride (shared/src/types.ts) — most
+  // callers never set this.
+  apiBaseUrlOverride?: string | null;
 }
 
 function baseUrl(config: ProtectConfig): string {
-  return `https://${config.host}/proxy/protect/integration`;
+  return protectApiBase(config.host, config.apiBaseUrlOverride);
+}
+
+// wss:// counterpart of baseUrl — subscribeDevices needs a websocket URL,
+// not an HTTP one. An override is expected to be an http(s):// base (same
+// as what protectApiBase returns for HTTP calls); swapped to ws(s):// here
+// rather than asking the operator to enter two separate overrides.
+function wsBaseUrl(config: ProtectConfig): string {
+  return baseUrl(config).replace(/^http/i, "ws");
 }
 
 // Bun-specific fetch/WebSocket option to accept the console's self-signed
@@ -38,6 +50,20 @@ function baseUrl(config: ProtectConfig): string {
 // resolveWebhookTarget.ts can apply the same treatment to "console" kind
 // webhook deliveries — same console, same self-signed cert.
 export const insecureTls = { tls: { rejectUnauthorized: false } };
+
+// Skipping cert validation is only correct for the default path (a direct
+// LAN connection to the console's own self-signed cert, which is the norm
+// for Protect, not an exception). apiBaseUrlOverride exists specifically
+// for reaching a console through something else — e.g. UniFi's
+// remote/cloud API base — which presents a real, publicly-trusted cert;
+// silently skipping validation there would blind this app to a genuine
+// MITM on a connection that's supposed to be verifiable. So: no override
+// -> expect self-signed, skip validation. Override set -> validate for
+// real. Exported so resolveWebhookTarget.ts applies the same rule to
+// "console" kind webhook deliveries.
+export function tlsOptionsFor(config: Pick<ProtectConfig, "apiBaseUrlOverride">): typeof insecureTls | {} {
+  return config.apiBaseUrlOverride ? {} : insecureTls;
+}
 
 // An unreachable/blackholed host (wrong IP, firewalled) otherwise hangs
 // the request for the OS's TCP connect timeout — often a minute or more —
@@ -58,7 +84,7 @@ async function protectFetch(
       ...rest,
       headers: { "X-API-KEY": config.apiKey, ...rest.headers },
       signal: AbortSignal.timeout(timeoutMs),
-      ...insecureTls,
+      ...tlsOptionsFor(config),
     } as RequestInit);
   } catch (err) {
     if (err instanceof Error && err.name === "TimeoutError") {
@@ -180,10 +206,10 @@ export function subscribeDevices(
 
   function connect() {
     if (closed) return;
-    const url = `wss://${config.host}/proxy/protect/integration/v1/subscribe/devices`;
+    const url = `${wsBaseUrl(config)}/v1/subscribe/devices`;
     ws = new WebSocket(url, {
       headers: { "X-API-KEY": config.apiKey },
-      ...insecureTls,
+      ...tlsOptionsFor(config),
     } as any);
 
     ws.addEventListener("open", () => {

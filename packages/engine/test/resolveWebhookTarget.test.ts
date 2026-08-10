@@ -32,6 +32,7 @@ describe("resolveWebhookTarget", () => {
       name: "Main site NVR",
       host: "192.168.1.1",
       apiKey: "console-api-key",
+      apiBaseUrlOverride: null,
       defaultIntervalSeconds: 300,
       defaultWebhookId: "default-hook",
       createdAt: 0,
@@ -44,6 +45,29 @@ describe("resolveWebhookTarget", () => {
     expect(resolved.method).toBe("POST");
     expect(resolved.headers).toEqual({ "X-API-Key": "console-api-key", Accept: "application/json" });
     expect(resolved.insecure).toBe(true); // self-signed cert, same as every other call to this console
+  });
+
+  test("console kind respects apiBaseUrlOverride when set", () => {
+    const store = freshStore();
+    store.upsertProtectConsole({
+      id: "console-2",
+      name: "Remote NVR",
+      host: "192.168.1.1",
+      apiKey: "console-api-key",
+      apiBaseUrlOverride: "https://unifi.ui.com/proxy/consoles/abc123/protect/integration",
+      defaultIntervalSeconds: 300,
+      defaultWebhookId: null,
+      createdAt: 0,
+    });
+
+    const target: WebhookTarget = { kind: "console", consoleId: "console-2", webhookId: "freezer-alert" };
+    const resolved = resolveWebhookTarget(target, store);
+
+    expect(resolved.url).toBe("https://unifi.ui.com/proxy/consoles/abc123/protect/integration/v1/alarm-manager/webhook/freezer-alert");
+    // Unlike a direct-to-console connection (self-signed by default — see
+    // the test above), an override implies a real cert, so it should get
+    // real validation, not the self-signed bypass.
+    expect(resolved.insecure).toBe(false);
   });
 
   test("console kind throws if the referenced console no longer exists", () => {

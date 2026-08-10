@@ -23,6 +23,13 @@ export interface ProtectConsole {
   name: string; // friendly label, e.g. "Main site NVR"
   host: string; // LAN IP or hostname
   apiKey: string;
+  // Optional override for the API base URL, normally derived from `host`
+  // as `https://{host}/proxy/protect/integration` (see
+  // shared/src/consoleWebhook.ts's protectApiBase). Most deployments never
+  // need this — it exists for reaching a console through something other
+  // than a direct LAN path (e.g. UniFi's remote/cloud API base) instead of
+  // the console's own local address. Null means "derive it from host".
+  apiBaseUrlOverride: string | null;
   // Default expected reporting interval (seconds) for sensors on this
   // console with no per-sensor override and no observed data yet. See
   // packages/shared/src/interval.ts.

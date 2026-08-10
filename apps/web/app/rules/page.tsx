@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type {
   Latch,
@@ -61,29 +62,46 @@ interface WebhookFormValue {
   url: string;
   method: "GET" | "POST";
   bearerToken: string; // never prefilled on edit — see openEditDialog
+  bodyTemplate: string; // custom-only; unlike bearerToken this isn't a secret, so it IS prefilled on edit
 }
 
 function emptyWebhookFormValue(): WebhookFormValue {
-  return { kind: "console", consoleId: "", webhookId: "", url: "", method: "POST", bearerToken: "" };
+  return { kind: "console", consoleId: "", webhookId: "", url: "", method: "POST", bearerToken: "", bodyTemplate: "" };
 }
 
 // bearerToken is deliberately left blank even when editing an existing
 // custom webhook that has one — GET /api/latches always masks it (see
 // latchRedaction.ts), so there's no real value to prefill; the field's
 // placeholder explains that blank means "keep the existing token."
+// bodyTemplate isn't credential-bearing (latchRedaction.ts passes it
+// through unmasked), so it's safe to prefill from the real stored value.
 function webhookFormValueFromTarget(target: WebhookTarget | undefined): WebhookFormValue {
   if (!target) return emptyWebhookFormValue();
   if (target.kind === "console") {
-    return { kind: "console", consoleId: target.consoleId, webhookId: target.webhookId, url: "", method: "POST", bearerToken: "" };
+    return { kind: "console", consoleId: target.consoleId, webhookId: target.webhookId, url: "", method: "POST", bearerToken: "", bodyTemplate: "" };
   }
-  return { kind: "custom", consoleId: "", webhookId: "", url: target.url, method: target.method, bearerToken: "" };
+  return {
+    kind: "custom",
+    consoleId: "",
+    webhookId: "",
+    url: target.url,
+    method: target.method,
+    bearerToken: "",
+    bodyTemplate: target.bodyTemplate ?? "",
+  };
 }
 
 function buildWebhookTarget(v: WebhookFormValue): WebhookTarget {
   if (v.kind === "console") {
     return { kind: "console", consoleId: v.consoleId, webhookId: v.webhookId };
   }
-  return { kind: "custom", url: v.url, method: v.method, bearerToken: v.bearerToken || undefined };
+  return {
+    kind: "custom",
+    url: v.url,
+    method: v.method,
+    bearerToken: v.bearerToken || undefined,
+    bodyTemplate: v.bodyTemplate || undefined,
+  };
 }
 
 // Duration can be picked from the Unifi-matched preset list or typed as
@@ -263,7 +281,7 @@ function WebhookFieldsEditor({
           </div>
           {selectedConsole && value.webhookId && (
             <p className="break-all font-mono text-xs text-muted-foreground">
-              {buildConsoleWebhookUrl(selectedConsole.host, value.webhookId)}
+              {buildConsoleWebhookUrl(selectedConsole.host, value.webhookId, selectedConsole.apiBaseUrlOverride)}
             </p>
           )}
         </>
@@ -286,6 +304,22 @@ function WebhookFieldsEditor({
               onChange={(e) => onChange({ ...value, bearerToken: e.target.value })}
               placeholder={editing ? "leave blank to keep the existing token" : "sent as Authorization: Bearer …"}
             />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">Body template (optional, POST only)</label>
+            <Textarea
+              value={value.bodyTemplate}
+              onChange={(e) => onChange({ ...value, bodyTemplate: e.target.value })}
+              placeholder={'{"sensor": "{{sensorName}}", "value": {{value}}, "threshold": "{{threshold}}"}'}
+            />
+            <p className="text-xs text-muted-foreground">
+              Placeholders: <code className="font-mono">{"{{sensorName}}"}</code>{" "}
+              <code className="font-mono">{"{{metric}}"}</code> <code className="font-mono">{"{{value}}"}</code>{" "}
+              <code className="font-mono">{"{{threshold}}"}</code>{" "}
+              <code className="font-mono">{"{{durationMinutes}}"}</code>. <code className="font-mono">value</code>{" "}
+              and <code className="font-mono">threshold</code> are always in Celsius, independent of any account's
+              display unit. Left blank, no body is sent. Only used when method is POST.
+            </p>
           </div>
         </>
       )}
@@ -374,6 +408,25 @@ export default function RulesPage() {
   const customDurationSeconds = partsToSeconds(form.customDays, form.customHours, form.customMinutes, form.customSeconds);
   const customDurationTooShort =
     form.durationMode === "custom" && selectedInterval != null && customDurationSeconds < selectedInterval.seconds;
+
+  // Below the interval floor is a hard rejection (customDurationTooShort /
+  // the disabled preset options above) — this is a softer, non-blocking
+  // nudge for the zone just above that floor. A duration of exactly 1x the
+  // interval only guarantees one more reading arrives before firing; a
+  // single delayed/flaky sample right at that edge is enough to trip it
+  // (see the false-positive note below). 2x guarantees at least two
+  // independent confirming readings — a real debounce, not just "didn't
+  // clear before the next poll." Not enforced as a floor: a short duration
+  // can be a deliberate, informed choice on a sensor known to be reliable,
+  // and CLAUDE.md's correctness priority cuts both ways — this app can't
+  // silently trade "no false positives" for "misses were slower to fire."
+  const weakDebounce =
+    selectedInterval != null &&
+    !customDurationTooShort &&
+    (() => {
+      const seconds = getDurationSeconds(form);
+      return seconds != null && seconds < selectedInterval.seconds * 2;
+    })();
 
   // Fields are typed in the user's display unit (e.g. Fahrenheit) — convert
   // to the storage/evaluation unit (always Celsius for temperature) before
@@ -827,6 +880,13 @@ export default function RulesPage() {
                   This sensor's effective reporting interval is ~{selectedInterval.seconds}s (
                   {selectedInterval.source.replace("-", " ")}) — durations shorter than that{" "}
                   {form.durationMode === "preset" ? "are disabled above" : "will be rejected"}.
+                </p>
+              )}
+              {weakDebounce && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  This duration is only ~1x the reporting interval, so a single late or flaky reading can be enough
+                  to fire it. Consider at least 2x (~{selectedInterval!.seconds * 2}s) for a sturdier debounce — not
+                  required, just a stronger guarantee against a one-sample false positive.
                 </p>
               )}
               <p className="text-xs text-muted-foreground">
