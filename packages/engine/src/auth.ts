@@ -8,18 +8,47 @@ import { users } from "./schema";
 
 // Argon2id hashing via Bun's built-in Bun.password — no extra dependency.
 // Plaintext passwords are never stored or logged; any log line that touches
-// a credential goes through maskSecret first.
+// a credential goes through maskSecret first. Generated passwords are the
+// one deliberate exception: they're returned in full, once, from
+// createUserWithGeneratedPassword/resetPasswordToRandom, because an admin
+// has to relay them to the account's owner out-of-band — never logged,
+// never persisted anywhere but the argon2 hash.
 //
 // No env-seeded bootstrap account: the first account is created through the
-// normal signup endpoint while the users table is empty (see
-// canSelfRegister/addUser's role handling below) — the caller (route
+// normal signup endpoint while the users table is empty — the caller (route
 // handler) is responsible for the "only when zero accounts exist" check
 // before allowing an unauthenticated call through.
 
 export class RoleError extends Error {}
 
+const GENERATED_PASSWORD_LENGTH = 16;
+const GENERATED_PASSWORD_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+// Uniform over the alphabet via rejection sampling (a plain `% alphabet
+// length` on a random byte is very slightly biased toward low indices —
+// not worth the shortcut for something used as a credential).
+function generatePassword(): string {
+  const alphabetSize = GENERATED_PASSWORD_ALPHABET.length; // 62
+  const maxUnbiased = 256 - (256 % alphabetSize); // 248 — reject bytes >= this
+  let out = "";
+  while (out.length < GENERATED_PASSWORD_LENGTH) {
+    const bytes = crypto.getRandomValues(new Uint8Array(GENERATED_PASSWORD_LENGTH - out.length));
+    for (const byte of bytes) {
+      if (byte >= maxUnbiased) continue;
+      out += GENERATED_PASSWORD_ALPHABET[byte % alphabetSize];
+    }
+  }
+  return out;
+}
+
 function toUser(row: typeof schema.users.$inferSelect): User {
-  return { id: row.id, username: row.username, role: row.role as Role, createdAt: row.createdAt };
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role as Role,
+    mustResetPassword: row.mustResetPassword,
+    createdAt: row.createdAt,
+  };
 }
 
 export class AuthStore {
@@ -38,6 +67,11 @@ export class AuthStore {
     return row ? toUser(row) : null;
   }
 
+  // Self-service path only (bootstrap signup, where the account owner
+  // chooses and already knows their own password) — mustResetPassword is
+  // always false here. Admin-created accounts go through
+  // createUserWithGeneratedPassword instead, never this.
+  //
   // role defaults to "user"; the very first account (count() === 0 at call
   // time) is always forced to "superadmin" regardless of what's passed, so
   // there's never a deployment with zero superadmins.
@@ -48,9 +82,26 @@ export class AuthStore {
     const id = crypto.randomUUID();
     const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
     const createdAt = Date.now();
-    this.db.insert(users).values({ id, username, passwordHash, role: effectiveRole, createdAt }).run();
+    this.db
+      .insert(users)
+      .values({ id, username, passwordHash, role: effectiveRole, mustResetPassword: false, createdAt })
+      .run();
     console.log(`[auth] created user "${username}" as ${effectiveRole} (password ${maskSecret(password)})`);
-    return { id, username, role: effectiveRole, createdAt };
+    return { id, username, role: effectiveRole, mustResetPassword: false, createdAt };
+  }
+
+  // Admin-created accounts: the admin never types a password for someone
+  // else. Generates a random one, forces a reset before the account can do
+  // anything else, and returns the plaintext once so the admin can relay
+  // it out-of-band — it's never stored or logged anywhere but the hash.
+  async createUserWithGeneratedPassword(username: string, role: Role): Promise<{ user: User; password: string }> {
+    const password = generatePassword();
+    const id = crypto.randomUUID();
+    const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
+    const createdAt = Date.now();
+    this.db.insert(users).values({ id, username, passwordHash, role, mustResetPassword: true, createdAt }).run();
+    console.log(`[auth] created user "${username}" as ${role} with a generated password (reset required)`);
+    return { user: { id, username, role, mustResetPassword: true, createdAt }, password };
   }
 
   removeUser(id: string): void {
@@ -66,7 +117,8 @@ export class AuthStore {
 
   // Self-service password change — requires proving the current password,
   // not gated by role (every account, including "user", can change its
-  // own password).
+  // own password). Always clears mustResetPassword, whether or not it was
+  // set — this is the only way that flag ever gets cleared.
   async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<boolean> {
     const row = this.db.select().from(users).where(eq(users.id, userId)).get();
     if (!row) return false;
@@ -74,9 +126,35 @@ export class AuthStore {
     if (!ok) return false;
 
     const passwordHash = await Bun.password.hash(newPassword, { algorithm: "argon2id" });
-    this.db.update(users).set({ passwordHash }).where(eq(users.id, userId)).run();
+    this.db.update(users).set({ passwordHash, mustResetPassword: false }).where(eq(users.id, userId)).run();
     console.log(`[auth] password changed for user "${row.username}"`);
     return true;
+  }
+
+  // Admin action: marks the account's *current* password as no longer
+  // sufficient on its own — it still authenticates (proving identity), but
+  // the account is locked out of everything except changing its password
+  // until it does. Doesn't touch the hash, so the owner doesn't need a new
+  // credential relayed to them if they still remember their old one.
+  invalidatePassword(userId: string): User | null {
+    this.db.update(users).set({ mustResetPassword: true }).where(eq(users.id, userId)).run();
+    const updated = this.getUser(userId);
+    if (updated) console.log(`[auth] password invalidated for user "${updated.username}" — reset required`);
+    return updated;
+  }
+
+  // Admin action: generates a brand new random password (the owner's old
+  // one no longer works at all) and forces a reset. Returns the plaintext
+  // once, same handoff contract as createUserWithGeneratedPassword.
+  async resetPasswordToRandom(userId: string): Promise<{ user: User; password: string } | null> {
+    const existing = this.getUser(userId);
+    if (!existing) return null;
+
+    const password = generatePassword();
+    const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
+    this.db.update(users).set({ passwordHash, mustResetPassword: true }).where(eq(users.id, userId)).run();
+    console.log(`[auth] password reset to a generated value for user "${existing.username}" — reset required`);
+    return { user: { ...existing, mustResetPassword: true }, password };
   }
 
   // Promotes/demotes an account's role. Only a superadmin may call this

@@ -63,4 +63,64 @@ describe("AuthStore bootstrap and roles", () => {
     expect(await store.verify("alice", "old-password-123")).toBeNull();
     expect(await store.verify("alice", "new-password-123")).not.toBeNull();
   });
+
+  test("bootstrap/self-chosen accounts never require a reset", async () => {
+    const store = new AuthStore(createTestDb());
+    const user = await store.addUser("alice", "hunter2hunter2");
+    expect(user.mustResetPassword).toBe(false);
+  });
+});
+
+describe("generated passwords and forced reset", () => {
+  test("createUserWithGeneratedPassword forces a reset and returns a usable 16-char password", async () => {
+    const store = new AuthStore(createTestDb());
+    await store.addUser("root", "hunter2hunter2"); // first account, so bob below isn't forced to superadmin
+
+    const { user, password } = await store.createUserWithGeneratedPassword("bob", "admin");
+    expect(user.mustResetPassword).toBe(true);
+    expect(user.role).toBe("admin");
+    expect(password).toHaveLength(16);
+    expect(password).toMatch(/^[A-Za-z0-9]{16}$/);
+
+    // the generated password actually authenticates
+    const verified = await store.verify("bob", password);
+    expect(verified?.mustResetPassword).toBe(true);
+  });
+
+  test("changePassword clears mustResetPassword", async () => {
+    const store = new AuthStore(createTestDb());
+    await store.addUser("root", "hunter2hunter2");
+    const { user, password } = await store.createUserWithGeneratedPassword("bob", "user");
+
+    const ok = await store.changePassword(user.id, password, "a-new-chosen-password");
+    expect(ok).toBe(true);
+    const reloaded = await store.verify("bob", "a-new-chosen-password");
+    expect(reloaded?.mustResetPassword).toBe(false);
+  });
+
+  test("invalidatePassword forces a reset without changing the hash", async () => {
+    const store = new AuthStore(createTestDb());
+    const alice = await store.addUser("alice", "still-works-123");
+
+    const updated = store.invalidatePassword(alice.id);
+    expect(updated?.mustResetPassword).toBe(true);
+
+    // old password still authenticates — it's marked invalid, not rotated
+    const verified = await store.verify("alice", "still-works-123");
+    expect(verified).not.toBeNull();
+    expect(verified?.mustResetPassword).toBe(true);
+  });
+
+  test("resetPasswordToRandom rotates the hash and forces a reset", async () => {
+    const store = new AuthStore(createTestDb());
+    const alice = await store.addUser("alice", "old-password-123");
+
+    const result = await store.resetPasswordToRandom(alice.id);
+    expect(result?.user.mustResetPassword).toBe(true);
+    expect(result?.password).toHaveLength(16);
+
+    expect(await store.verify("alice", "old-password-123")).toBeNull();
+    const reVerified = await store.verify("alice", result!.password);
+    expect(reVerified).not.toBeNull();
+  });
 });

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine, RoleError } from "@unifi-sensor-latch/engine";
 import type { Role } from "@unifi-sensor-latch/shared";
-import { getSessionUser, hasRole } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 
 const VALID_ROLES: Role[] = ["user", "admin", "superadmin"];
 
@@ -9,10 +9,8 @@ const VALID_ROLES: Role[] = ["user", "admin", "superadmin"];
 // project's role model (an admin can create accounts but never elevate one
 // to admin/superadmin, or change anyone's role at all).
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const actor = await getSessionUser();
-  if (!actor || !hasRole(actor, "superadmin")) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const actor = await requireRole("superadmin");
+  if (actor instanceof NextResponse) return actor;
 
   const { id } = await params;
   const { role } = await req.json();

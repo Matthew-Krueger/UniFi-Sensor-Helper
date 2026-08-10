@@ -36,7 +36,8 @@ export default function LoginPage() {
         body: JSON.stringify({ username, password }),
       });
       if (res.ok) {
-        router.push("/");
+        const body = await res.json();
+        router.push(body.user?.mustResetPassword ? "/reset-password" : "/");
         router.refresh();
       } else {
         setError("Invalid username or password");

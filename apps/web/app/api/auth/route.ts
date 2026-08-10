@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   }
 
   await createSessionCookie(user.id);
-  return NextResponse.json({ user: { id: user.id, username: user.username, role: user.role } });
+  return NextResponse.json({ user });
 }
 
 export async function DELETE() {

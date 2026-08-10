@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
 import { maskSecret } from "@unifi-sensor-latch/shared";
 import type { ProtectConsole } from "@unifi-sensor-latch/shared";
-import { getSessionUser, hasRole } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 
 // Protect console connections (host + API key) — user-editable in SQLite,
 // not .env, since a site can have more than one console (see schema.ts).
@@ -13,15 +13,15 @@ function redact(console_: ProtectConsole) {
 }
 
 export async function GET() {
-  const actor = await getSessionUser();
-  if (!actor || !hasRole(actor, "user")) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const actor = await requireRole("user");
+  if (actor instanceof NextResponse) return actor;
   const consoles = getEngine().config.listProtectConsoles().map(redact);
   return NextResponse.json({ consoles });
 }
 
 export async function POST(req: NextRequest) {
-  const actor = await getSessionUser();
-  if (!actor || !hasRole(actor, "admin")) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const actor = await requireRole("admin");
+  if (actor instanceof NextResponse) return actor;
 
   const body = await req.json();
   const { name, host, apiKey } = body;

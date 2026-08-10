@@ -1,3 +1,4 @@
+import { NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
 import type { Role, User } from "@unifi-sensor-latch/shared";
 import { getSessionUserId } from "./session";
@@ -17,4 +18,26 @@ const ROLE_RANK: Record<Role, number> = { user: 0, admin: 1, superadmin: 2 };
 // "user"-level check, "user" does not satisfy an "admin"-level check.
 export function hasRole(user: User, minimum: Role): boolean {
   return ROLE_RANK[user.role] >= ROLE_RANK[minimum];
+}
+
+// Single entry point most Route Handlers use instead of hand-rolling
+// getSessionUser()+hasRole(): looks up the session, checks the role floor,
+// AND blocks accounts with mustResetPassword set — an admin-created or
+// admin-reset account can prove it's still them (verify() succeeds) but
+// can't do anything else until it changes its password. The two callers
+// that must bypass this (PATCH /api/account/password, and GET/DELETE
+// /api/auth) call getSessionUser() directly instead.
+//
+// Returns the actor on success, or a NextResponse to return as-is on
+// failure — callers do `const result = await requireRole(...); if (result
+// instanceof NextResponse) return result;`.
+export async function requireRole(minimum: Role): Promise<User | NextResponse> {
+  const actor = await getSessionUser();
+  if (!actor || !hasRole(actor, minimum)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  if (actor.mustResetPassword) {
+    return NextResponse.json({ error: "password reset required" }, { status: 403 });
+  }
+  return actor;
 }

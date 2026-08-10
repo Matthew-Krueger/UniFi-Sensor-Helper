@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { getSessionUser, hasRole } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 
 // Manual "refresh" action for the Sensors page (SPEC.md section 5/12) — runs
 // discovery against every configured Protect console and upserts the
@@ -8,8 +8,8 @@ import { getSessionUser, hasRole } from "@/lib/auth";
 // keeps sensors' live readings flowing; this is only for picking up newly
 // added/removed physical sensors without needing an app restart.
 export async function POST() {
-  const actor = await getSessionUser();
-  if (!actor || !hasRole(actor, "admin")) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const actor = await requireRole("admin");
+  if (actor instanceof NextResponse) return actor;
 
   const engine = getEngine();
   const consoles = engine.config.listProtectConsoles();

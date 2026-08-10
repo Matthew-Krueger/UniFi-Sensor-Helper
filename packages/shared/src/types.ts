@@ -76,6 +76,11 @@ export interface User {
   id: string;
   username: string;
   role: Role;
+  // True for admin-created accounts (their password was randomly
+  // generated, never admin-typed) and any account an admin has
+  // invalidated or reset. Blocks everything except changing your own
+  // password until cleared by a successful self-service password change.
+  mustResetPassword: boolean;
   createdAt: number;
 }
 

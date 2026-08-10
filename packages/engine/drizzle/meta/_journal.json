@@ -15,6 +15,13 @@
       "when": 1786337920540,
       "tag": "0001_fair_shen",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786338983497,
+      "tag": "0002_chemical_mister_sinister",
+      "breakpoints": true
     }
   ]
 }

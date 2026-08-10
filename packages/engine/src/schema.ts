@@ -44,6 +44,13 @@ export const users = sqliteTable("users", {
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   role: text("role").notNull().default("user"), // "user" | "admin" | "superadmin"
+  // True for every admin-created account (its password was never
+  // admin-chosen — see AuthStore.createUserWithGeneratedPassword) and for
+  // any account an admin has invalidated/reset. Blocks everything except
+  // PATCH /api/account/password until cleared by a successful self-service
+  // password change. False for the self-service bootstrap account, which
+  // chose its own password.
+  mustResetPassword: integer("must_reset_password", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull(),
 });
 

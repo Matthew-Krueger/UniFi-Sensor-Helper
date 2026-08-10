@@ -76,6 +76,22 @@ table, see `packages/engine/src/schema.ts`):
 Every account, regardless of role, can change its own password
 (`PATCH /api/account/password`, requires the current password).
 
+**Admins never choose another account's password, and can force a
+reset.** When an `admin`/`superadmin` creates an account
+(`POST /api/users`, non-bootstrap path), a random 16-character
+alphanumeric password is generated server-side and returned exactly once
+in that response — never admin-typed, never logged in full, never
+recoverable afterward. The new account is flagged `mustResetPassword` and
+is blocked from every route except changing its own password until it
+does. An admin can also act on an *existing* account two ways:
+`PATCH /api/users/{id}/invalidate-password` sets the same flag without
+touching the password hash (the owner's existing password still
+authenticates — proving it's them — but the account is locked out of
+everything else until it's changed); `PATCH /api/users/{id}/reset-password`
+additionally rotates to a fresh generated password, invalidating the old
+one outright. `admin` can only target `user` accounts this way;
+`superadmin` can target anyone.
+
 **No env-seeded bootstrap credential.** The first account is created
 through the app itself: account sign-up (`POST /api/users`) is open,
 without a session, **only** while the `users` table is empty — the check
