@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { intervalTooShortMessage, isDurationValid, maskSecret } from "@unifi-sensor-latch/shared";
+import { intervalTooShortMessage, isDurationValid, maskSecret, validateCondition } from "@unifi-sensor-latch/shared";
 import type { Latch } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
 
@@ -28,8 +28,11 @@ export async function POST(req: NextRequest) {
   if (actor instanceof NextResponse) return actor;
 
   const latch = (await req.json()) as Latch;
-  // TODO: validate shape (sensorId exists, thresholds numeric, etc.) once
-  // the Latches page is built out.
+
+  const conditionCheck = validateCondition(latch.condition);
+  if (!conditionCheck.valid) {
+    return NextResponse.json({ error: conditionCheck.error }, { status: 400 });
+  }
 
   const engine = getEngine();
   const interval = engine.getEffectiveInterval(latch.sensorId, latch.metric);

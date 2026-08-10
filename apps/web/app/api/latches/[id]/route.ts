@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { intervalTooShortMessage, isDurationValid, maskSecret } from "@unifi-sensor-latch/shared";
+import { intervalTooShortMessage, isDurationValid, maskSecret, validateCondition } from "@unifi-sensor-latch/shared";
 import type { Latch } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
 
@@ -25,6 +25,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const patch = (await req.json()) as Partial<Latch>;
   const updated: Latch = { ...existing, ...patch, id };
+
+  if (patch.condition !== undefined) {
+    const conditionCheck = validateCondition(updated.condition);
+    if (!conditionCheck.valid) {
+      return NextResponse.json({ error: conditionCheck.error }, { status: 400 });
+    }
+  }
 
   // Only re-check when something that affects the duration/interval
   // relationship actually changed — a pure enable/disable toggle
