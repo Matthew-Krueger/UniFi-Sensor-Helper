@@ -39,7 +39,6 @@ export default function LoginPage() {
       if (res.ok) {
         const body = await res.json();
         router.push(body.user?.mustResetPassword ? "/reset-password" : "/");
-        router.refresh();
       } else {
         setError("Invalid username or password");
       }
@@ -86,7 +85,6 @@ export default function LoginPage() {
       });
       if (loginRes.ok) {
         router.push("/");
-        router.refresh();
       } else {
         setError("Account created — please sign in.");
         setNeedsBootstrap(false);

@@ -9,7 +9,6 @@ export function SignOutButton() {
   async function signOut() {
     await fetch("/api/auth", { method: "DELETE" });
     router.push("/login");
-    router.refresh();
   }
 
   return (

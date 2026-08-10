@@ -44,7 +44,6 @@ export function SessionGuard() {
       hadUser.current = false;
       fetch("/api/auth", { method: "DELETE" }).finally(() => {
         router.replace("/login");
-        router.refresh();
       });
     }
   }, [user, loading, pathname, router]);

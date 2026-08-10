@@ -43,7 +43,6 @@ export default function ResetPasswordPage() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "failed to change password");
       router.push("/");
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
