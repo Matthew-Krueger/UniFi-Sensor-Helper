@@ -42,6 +42,13 @@ is.
 
 - **Next.js, App Router, TypeScript** — one project, frontend and backend
   together. Not a separate Express API plus a separate React app.
+- **Runtime: Bun**, not Node — chosen so a Docker image can pin one exact
+  runtime version identically across the Mac dev machine and the Debian
+  deploy target, and to use `bun:sqlite`/`Bun.password` (argon2) without
+  extra dependencies. Deployed as a Docker image (see DEPLOY.md), managed
+  by systemd on the deploy target — not a bare Node/Bun process directly.
+- **Storage: SQLite** (`bun:sqlite`), not flat config/state files — see
+  SPEC.md section 6. One gitignored `data/app.db`, not a database server.
 - **Styling**: Tailwind + shadcn/ui, as specified. `next-themes` for
   dark/light mode — respect system preference by default, let the user
   override and persist it.
@@ -147,8 +154,10 @@ nice-to-have:
 
 ## What not to do
 
-- Don't add multi-user auth, roles, or a database beyond what's needed
-  for latch state persistence. Out of scope per SPEC.md.
+- Multi-user auth (multiple operator accounts, argon2-hashed passwords in
+  SQLite) is in scope per SPEC.md section 3 — but don't go further than
+  that. No roles/permission tiers, no RBAC, no user-facing profile fields
+  beyond username/password. Every account has identical access.
 - Don't poll the Protect API faster than the sensor's own reporting
   interval "just in case" — it doesn't improve detection latency and
   it's unnecessary load. Confirm the interval before deciding on a

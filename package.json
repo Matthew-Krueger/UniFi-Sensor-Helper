@@ -1,0 +1,21 @@
+{
+  "name": "unifi-sensor-latch",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun --filter web dev",
+    "build": "bun --filter web build",
+    "start": "bun --filter web start",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

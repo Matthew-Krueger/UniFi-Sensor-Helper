@@ -45,8 +45,12 @@ recovering" rule, and only then fires a webhook.
 
 ## 3. Non-goals
 
-- Multi-user auth, RBAC, or account management. One operator account,
-  credentials from `.env`.
+- RBAC or permission tiers. Auth supports multiple operator accounts
+  (username + argon2-hashed password, stored in SQLite), but every account
+  has identical, full access — there are no roles. A single bootstrap
+  account is seeded from `ADMIN_USERNAME`/`ADMIN_PASSWORD` in `.env` (or the
+  container's env, under Docker) on first boot only; further accounts are
+  managed through the UI, not `.env`.
 - Historical time-series storage/graphing beyond a simple recent-events
   log (Protect already does this natively for raw sensor data).
 - Reimplementing Protect's own Alarm Manager UI. We only need to create
@@ -163,68 +167,36 @@ React (App Router pages, Server + Client Components)
    |-- Theme toggle (next-themes): dark/light, respects system preference, persisted
 ```
 
-## 6. Configuration file
+## 6. Configuration storage
 
-Non-secret, human-editable, lives outside `.env`. JSON is the path of
-least resistance here and needs no extra parsing dependency; document if
-you land somewhere else instead.
+Non-secret, user-editable settings (sensors, latches, latch state) live in
+a local SQLite database (`data/app.db`, gitignored, path set via
+`DATABASE_PATH`), managed entirely through the UI/`/api/*` Route Handlers —
+not a hand-edited file. This supersedes the original `config.json` design:
+SQLite gives atomic writes for the state-machine-critical `latch_state`
+table, at the cost of the file no longer being hand-diffable. There's no
+`config.example.json` to ship; a fresh deploy starts from an empty
+database and the app must render a sane empty state (SPEC.md section 12)
+rather than crashing.
 
-```json
-{
-  "sensors": [
-    { "id": "PROTECT-DEVICE-ID-1", "name": "Front Entry" },
-    { "id": "PROTECT-DEVICE-ID-2", "name": "Walk-in Freezer" }
-  ],
-  "latches": [
-    {
-      "id": "front-lux",
-      "sensorId": "PROTECT-DEVICE-ID-1",
-      "metric": "lux",
-      "direction": "above",
-      "armThreshold": 500,
-      "clearThreshold": 500,
-      "durationSeconds": 300,
-      "webhook": {
-        "url": "https://PROTECT-IP/proxy/protect/integration/v1/alarm-manager/webhook/WEBHOOK-ID",
-        "method": "POST",
-        "bodyTemplate": "{{sensorName}} light has been elevated for {{durationMinutes}} minutes"
-      },
-      "enabled": true
-    },
-    {
-      "id": "freezer-temp",
-      "sensorId": "PROTECT-DEVICE-ID-2",
-      "metric": "temperature",
-      "direction": "above",
-      "armThreshold": 55,
-      "clearThreshold": 38,
-      "durationSeconds": 600,
-      "webhook": {
-        "url": "https://PROTECT-IP/proxy/protect/integration/v1/alarm-manager/webhook/WEBHOOK-ID-2",
-        "method": "POST",
-        "bodyTemplate": "{{sensorName}} has been above {{threshold}}\u00b0F for {{durationMinutes}} minutes"
-      },
-      "resolvedWebhook": {
-        "url": "https://PROTECT-IP/proxy/protect/integration/v1/alarm-manager/webhook/WEBHOOK-ID-2-RESOLVED",
-        "method": "POST",
-        "bodyTemplate": "{{sensorName}} back to normal"
-      },
-      "enabled": true
-    }
-  ]
-}
-```
+Tables (see `packages/engine/src/db.ts` for the authoritative schema):
+
+- `sensors` — `id` (Protect device id), `name`, `discovered_metrics` (JSON
+  array).
+- `latches` — one row per (sensor, metric) latch: `sensor_id`, `metric`,
+  `direction`, `arm_threshold`, `clear_threshold`, `duration_seconds`,
+  `webhook_json`, `resolved_webhook_json`, `enabled`. Mirrors the `Latch`
+  domain type in section 4.
+- `latch_state` — one row per latch: `state` (idle/armed/fired),
+  `armed_at`, `fired_at`, `updated_at`. This is the restart-survival
+  mechanism referenced in section 11 — no separate JSON snapshot file.
+- `users` — operator accounts (see section 3): `username`,
+  `password_hash` (argon2id), `created_at`.
 
 If a webhook URL embeds a token or credential, treat that field as
-secret-bearing for logging/display purposes even though it lives in this
-file and not `.env` — see CLAUDE.md section on obfuscation.
-
-`config.json` itself contains real site data (actual device IDs, real
-webhook targets, a specific business's thresholds) and must not be
-committed to the repo, even though none of it is technically a secret —
-see section 12. The repo ships a `config.example.json` with placeholder
-values instead; the real file is generated or hand-created per
-deployment.
+secret-bearing for logging/display purposes even though it's stored
+alongside non-secret config — see CLAUDE.md's obfuscation section. The
+`/api/latches` Route Handler masks webhook URLs before returning them.
 
 ## 7. Protect-side setup (manual, one-time, per resolved latch)
 
@@ -272,32 +244,42 @@ and confidence level (confirmed by testing vs. inferred from docs).
 
 - HTTPS only, self-signed cert. Document the generation command used and
   where the cert/key live (outside version control).
-- Single operator account, username/password from `.env`, session-based
-  auth for the UI and its backing Route Handlers.
-- Runs as a dedicated non-root system user with no other privileges.
+- One or more operator accounts (username + argon2-hashed password, see
+  section 3), session-based auth for the UI and its backing Route
+  Handlers. A bootstrap account is seeded from env vars on first boot.
+- Runs as a dedicated non-root system user with no other privileges. Under
+  the Docker deploy model (section 10), this is the user that owns the
+  systemd unit driving the container, not a user inside the container image
+  itself (which also runs non-root — see `Dockerfile`).
 - See CLAUDE.md for the secret-handling rules that apply throughout.
 
 ## 10. Dev / deploy split
 
-- **Dev machine**: macOS (MacBook Pro). `next dev` for iteration.
+- **Runtime**: Bun, not Node — see CLAUDE.md's Stack section. Deployed as a
+  Docker image so the exact runtime version is pinned identically on both
+  the dev machine and the deploy target, rather than relying on whatever
+  Bun/Node happens to be installed on each (this is what section 9's
+  original Node-version-parity concern is resolved by).
+- **Dev machine**: macOS. `bun run server.ts` for iteration (no Docker
+  required for local dev).
 - **Deploy machine**: Debian 13, dedicated non-root system user, `systemd`
-  service.
-- Build with `output: 'standalone'` in `next.config` so the deployed
-  artifact is minimal and self-contained rather than requiring a full
-  `node_modules` copy on the server.
+  unit that runs `docker compose up` for this image (see `DEPLOY.md`) — the
+  container itself also runs as a non-root user internally.
+- Build with `output: 'standalone'` in `next.config.ts` so the deployed
+  image is minimal and self-contained.
 - The custom server entrypoint (section 5) is what actually runs in
   production — plain `next start` alone won't boot the latch engine or
-  terminate HTTPS with the self-signed cert, so make sure the systemd
-  `ExecStart` points at the compiled custom server, not at the Next.js CLI
-  directly.
-- Pin the Node version (e.g. an `.nvmrc` or `engines` field) and confirm
-  it matches between the Mac dev environment and the Debian 13 deploy
-  target — module-level singletons (the latch engine) can behave
-  differently under Next.js's dev-mode hot reloading than they do in a
-  production build; test the production build locally on the Mac
-  (`next build && node dist/server.js` or equivalent) before assuming
-  parity with `next dev`.
-- Document the exact systemd unit and `useradd` steps in `DEPLOY.md`.
+  terminate HTTPS with the self-signed cert. The Docker image's `CMD` runs
+  the compiled `server.ts` directly, never the Next.js CLI.
+- Pin the exact Bun version in both `.bun-version` (repo root) and the
+  `Dockerfile`'s base image tag, and keep them in sync when bumping —
+  module-level singletons (the latch engine) can behave differently across
+  runtime versions or under Next.js's dev-mode hot reloading than in a
+  production build; test the production build locally on the Mac (`docker
+  build . && docker run ...`) before assuming parity with `bun run
+  server.ts` in dev mode.
+- Document the exact `Dockerfile`, systemd unit, and `useradd` steps in
+  `DEPLOY.md`.
 
 ## 11. Open questions for the implementer to resolve and document
 
@@ -317,20 +299,20 @@ set of sensors and thresholds. That means:
 
 - **No hardcoded site data in source, ever.** No literal IPs, device IDs,
   sensor names, thresholds, or webhook URLs in `.ts`/`.tsx` files. If it's
-  specific to a deployment, it comes from `config.json` or `.env` — never
-  from a constant in the codebase.
+  specific to a deployment, it comes from the SQLite config database
+  (section 6) or `.env` — never from a constant in the codebase.
 - **Sensor selection is discovery-driven, not typed in.** The "Sensors"
   page in the UI queries the Protect API and lists whatever it finds. The
   user assigns a friendly name and builds latches against discovered
   sensors — they never hand-type a device ID they copied from somewhere.
   This is the main thing that makes standing up a second deployment
   practical instead of archaeology.
-- **`config.json` is gitignored, same as `.env`**, even though it isn't
+- **`data/app.db` is gitignored, same as `.env`**, even though it isn't
   secret — it's still one specific business's private operational data
   (their sensor layout, their thresholds, arguably their webhook
-  endpoints). Ship `config.example.json` with clearly fake placeholder
-  values instead, and make sure the app has a sane first-run behavior
-  when no real config exists yet (empty state in the UI, not a crash).
+  endpoints). There's no example file to ship for a database; the app
+  creates an empty one on first boot and must render a sane first-run
+  state (empty state in the UI, not a crash) until sensors/latches exist.
 - **README.md must assume zero prior context** — written for someone who
   has never seen this project before: prerequisites, how to get a Protect
   API key, first-run setup, how to generate the self-signed cert, how to

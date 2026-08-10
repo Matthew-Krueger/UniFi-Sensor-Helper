@@ -1,0 +1,20 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8443:8443"
+    environment:
+      - NODE_ENV=production
+      - PORT=8443
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - DATABASE_PATH=/repo/data/app.db
+      - TLS_CERT_PATH=/repo/certs/cert.pem
+      - TLS_KEY_PATH=/repo/certs/key.pem
+      - PROTECT_HOST=${PROTECT_HOST}
+      - PROTECT_API_KEY=${PROTECT_API_KEY}
+    volumes:
+      - ./data:/repo/data
+      - ./certs:/repo/certs:ro
+    restart: unless-stopped
