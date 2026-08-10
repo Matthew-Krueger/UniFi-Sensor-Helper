@@ -38,18 +38,9 @@ Mac dev build vs. deploy build differ only in what's targeted:
 - **Mac dev**: `bun install && cd apps/web && bun run server.ts` (runs
   against `next dev`-equivalent via `NODE_ENV` unset) for iteration, no
   Docker required.
-- **Deploy, single architecture**: `docker build -t unifi-sensor-helper .`
-  builds for the host machine's own architecture — nothing else needed.
-- **Deploy, cross-architecture** (e.g. building on an Apple Silicon Mac
-  for an x86 machine with no shared registry): `./scripts/docker-build.sh`
-  builds both `linux/arm64` (native) and `linux/amd64` (cross-built via
-  Docker Desktop's bundled QEMU — no separate setup, just slow: `next
-  build` runs several minutes under emulation), loads the arm64 image into
-  local Docker, and saves the amd64 image to
-  `dist/unifi-sensor-helper-amd64.tar` for `docker load` on the target
-  machine. Pass `--push <registry/image:tag>` instead to build and push a
-  proper multi-arch manifest if a registry is available — simpler when
-  it's an option.
+- **Deploy**: `docker build -t unifi-sensor-helper .` on the target
+  machine itself, building for whatever architecture that machine
+  actually is. Nothing else needed.
 
 **Not `output: 'standalone'`.** Tried it; reverted after live testing
 against this repo's actual monorepo + custom-server setup. Next's
