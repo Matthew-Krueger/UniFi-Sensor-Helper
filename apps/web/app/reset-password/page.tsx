@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { validatePassword } from "@unifi-sensor-latch/shared";
 
 // Forced landing page for any account with mustResetPassword set — either
 // admin-created (generated password, never seen by the account owner
@@ -22,6 +23,12 @@ export default function ResetPasswordPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    const passwordCheck = validatePassword(newPassword);
+    if (!passwordCheck.valid) {
+      setError(passwordCheck.error!);
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setError("New passwords don't match");
       return;
@@ -63,13 +70,18 @@ export default function ResetPasswordPage() {
               autoFocus
               required
             />
-            <Input
-              type="password"
-              placeholder="New password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              required
-            />
+            <div className="flex flex-col gap-1">
+              <Input
+                type="password"
+                placeholder="New password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                8-128 characters, at least 2 of: lowercase, uppercase, numbers, symbols.
+              </p>
+            </div>
             <Input
               type="password"
               placeholder="Confirm new password"

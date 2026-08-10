@@ -62,6 +62,39 @@ export interface Reading {
   timestamp: number;
 }
 
+// In-memory only (not persisted — resets on restart, which is fine for a
+// "is it alive right now" indicator). The Protect integration API doesn't
+// expose CPU/memory/storage for the console itself (checked against the
+// live OpenAPI spec — GET /v1/nvrs has no such fields), so this sticks to
+// what's actually measurable: our own connection state, a real round-trip
+// latency sample, and counts/timestamps derived from ingest.
+// One entry per phase of connectConsole (probe, discover, subscribe) —
+// gives the UI an actual trace of what's happening rather than a single
+// opaque "connecting" spinner. Capped to the most recent N (see
+// singleton.ts) so repeated reconnect attempts don't grow this forever.
+export interface ConsoleStatusStep {
+  label: string;
+  at: number;
+  ok: boolean;
+}
+
+export interface ConsoleStatus {
+  consoleId: string;
+  connectionState: "connecting" | "connected" | "disconnected" | "error";
+  applicationVersion: string | null; // Protect firmware version, from /v1/meta/info
+  latencyMs: number | null; // round-trip time of the last connectivity check
+  lastEventAt: number | null; // last time any sensor reading arrived from this console
+  sensorCount: number;
+  error: string | null;
+  steps: ConsoleStatusStep[];
+}
+
+export interface SensorStatus {
+  sensorId: string;
+  lastSeenAt: number | null;
+  values: Partial<Record<Metric, number>>;
+}
+
 // Three-tier role model (SPEC.md section 3):
 //   "user"       — read-only: dashboard/sensors/latches views, no writes.
 //   "admin"      — full operational access (sensors, latches, consoles,

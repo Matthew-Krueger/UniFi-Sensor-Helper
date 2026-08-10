@@ -54,8 +54,8 @@ endpoints in use and how each was confirmed against a live console.
    account** form instead of a sign-in form. This is only available while
    the users table is empty; the account you create here is always
    `superadmin`. From then on, further accounts are created from the
-   Settings → Users page by a logged-in `admin` or `superadmin`.
-6. On the **Settings** page, add your Protect console: a friendly name,
+   Users page by a logged-in `admin` or `superadmin`.
+6. On the **Consoles** page, add your Protect console: a friendly name,
    its LAN host/IP, and a local API key generated at unifi.ui.com. The
    engine connects immediately — no restart needed — and the API key is
    stored in SQLite (masked in the UI), not `.env`, since a site can add
@@ -63,12 +63,14 @@ endpoints in use and how each was confirmed against a live console.
 7. On the **Sensors** page, click **Refresh** to discover sensors from the
    console(s) you just added. Sensors are always discovery-driven; none are
    ever hardcoded.
-8. On the **Latches** page, create a latch against a discovered sensor's
+8. On the **Rules** page, create a rule against a discovered sensor's
    metric: arm/clear thresholds, how long it must stay armed before firing,
    and the webhook to call. See `SPEC.md` section 4 for worked examples.
+   ("Rule" is the UI name for what the domain model still calls a `Latch`
+   internally — same thing, friendlier name.)
 
-On first run, with no consoles, sensors, or latches configured yet, the
-Dashboard, Sensors, and Latches pages show an empty state rather than
+On first run, with no consoles, sensors, or rules configured yet, the
+Dashboard, Sensors, and Rules pages show an empty state rather than
 erroring.
 
 ## Running tests

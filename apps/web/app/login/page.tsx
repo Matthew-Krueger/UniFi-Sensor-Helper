@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { validatePassword, validateUsername } from "@unifi-sensor-latch/shared";
 
 // Two modes, decided by GET /api/auth's needsBootstrap flag (true only
 // while the users table is empty — SPEC.md section 3a). Sign-up is only
@@ -50,6 +51,17 @@ export default function LoginPage() {
   async function handleBootstrap(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    const usernameCheck = validateUsername(username);
+    if (!usernameCheck.valid) {
+      setError(usernameCheck.error!);
+      return;
+    }
+    const passwordCheck = validatePassword(password);
+    if (!passwordCheck.valid) {
+      setError(passwordCheck.error!);
+      return;
+    }
     if (password !== confirmPassword) {
       setError("Passwords don't match");
       return;
@@ -102,12 +114,17 @@ export default function LoginPage() {
           <CardContent>
             <form className="flex flex-col gap-4" onSubmit={handleBootstrap}>
               <Input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
-              <Input
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
+              <div className="flex flex-col gap-1">
+                <Input
+                  type="password"
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  8-128 characters, at least 2 of: lowercase, uppercase, numbers, symbols.
+                </p>
+              </div>
               <Input
                 type="password"
                 placeholder="Confirm password"

@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import animate from "tailwindcss-animate";
 
 // Relative content globs are resolved against process.cwd() by Tailwind —
 // server.ts chdir's into apps/web before Next boots specifically so this
@@ -34,7 +35,7 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [animate],
 };
 
 export default config;

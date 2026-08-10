@@ -8,6 +8,8 @@ import { requireRole } from "@/lib/auth";
 export async function GET() {
   const actor = await requireRole("user");
   if (actor instanceof NextResponse) return actor;
-  const sensors = getEngine().config.listSensors();
-  return NextResponse.json({ sensors });
+  const engine = getEngine();
+  const sensors = engine.config.listSensors();
+  const statuses = engine.listSensorStatuses();
+  return NextResponse.json({ sensors, statuses });
 }

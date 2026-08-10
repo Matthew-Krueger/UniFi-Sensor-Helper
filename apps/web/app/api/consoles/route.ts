@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { maskSecret } from "@unifi-sensor-latch/shared";
+import { consoleApiKeySchema, consoleHostSchema, consoleNameSchema, maskSecret } from "@unifi-sensor-latch/shared";
 import type { ProtectConsole } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
 
@@ -15,8 +15,10 @@ function redact(console_: ProtectConsole) {
 export async function GET() {
   const actor = await requireRole("user");
   if (actor instanceof NextResponse) return actor;
-  const consoles = getEngine().config.listProtectConsoles().map(redact);
-  return NextResponse.json({ consoles });
+  const engine = getEngine();
+  const consoles = engine.config.listProtectConsoles().map(redact);
+  const statuses = engine.listConsoleStatuses();
+  return NextResponse.json({ consoles, statuses });
 }
 
 export async function POST(req: NextRequest) {
@@ -24,24 +26,27 @@ export async function POST(req: NextRequest) {
   if (actor instanceof NextResponse) return actor;
 
   const body = await req.json();
-  const { name, host, apiKey } = body;
-  if (typeof name !== "string" || typeof host !== "string" || typeof apiKey !== "string" || !name || !host || !apiKey) {
-    return NextResponse.json({ error: "name, host, and apiKey are required" }, { status: 400 });
-  }
+  const name = consoleNameSchema.safeParse(body.name);
+  if (!name.success) return NextResponse.json({ error: name.error.issues[0]?.message }, { status: 400 });
+  const host = consoleHostSchema.safeParse(body.host);
+  if (!host.success) return NextResponse.json({ error: host.error.issues[0]?.message }, { status: 400 });
+  const apiKey = consoleApiKeySchema.safeParse(body.apiKey);
+  if (!apiKey.success) return NextResponse.json({ error: apiKey.error.issues[0]?.message }, { status: 400 });
 
   const engine = getEngine();
   const id: string = typeof body.id === "string" && body.id ? body.id : crypto.randomUUID();
-  const console_: ProtectConsole = { id, name, host, apiKey, createdAt: Date.now() };
+  const console_: ProtectConsole = { id, name: name.data, host: host.data, apiKey: apiKey.data, createdAt: Date.now() };
 
   engine.config.upsertProtectConsole(console_);
 
-  try {
-    await engine.connectConsole(console_);
-  } catch (err) {
-    // Saved even if the console isn't reachable right now — connectConsole
-    // itself logs and simply doesn't subscribe; the UI can retry later.
+  // Not awaited: connectConsole can take several seconds (probe, discover,
+  // subscribe, each with its own timeout — see protect.ts) and records a
+  // step-by-step trace as it goes (ConsoleStatus.steps) rather than making
+  // this request hang until the whole sequence finishes. The UI polls GET
+  // /api/consoles to watch that trace land in near-real-time.
+  engine.connectConsole(console_).catch((err) => {
     console.error("[api/consoles] connectConsole failed:", err);
-  }
+  });
 
   return NextResponse.json({ console: redact(console_) }, { status: 201 });
 }

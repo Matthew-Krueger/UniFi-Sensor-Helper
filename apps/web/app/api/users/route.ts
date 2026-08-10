@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { canAssignRole } from "@unifi-sensor-latch/shared";
+import { canAssignRole, passwordSchema, usernameSchema } from "@unifi-sensor-latch/shared";
 import type { Role } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
 
@@ -35,29 +35,36 @@ export async function POST(req: NextRequest) {
   const isBootstrap = engine.auth.count() === 0;
 
   if (isBootstrap) {
-    const { username, password } = await req.json();
-    if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
-      return NextResponse.json({ error: "username and password are required" }, { status: 400 });
+    const body = await req.json();
+    const username = usernameSchema.safeParse(body.username);
+    if (!username.success) {
+      return NextResponse.json({ error: username.error.issues[0]?.message }, { status: 400 });
+    }
+    const password = passwordSchema.safeParse(body.password);
+    if (!password.success) {
+      return NextResponse.json({ error: password.error.issues[0]?.message }, { status: 400 });
     }
     // role is ignored — addUser always forces superadmin when the table is empty.
-    const user = await engine.auth.addUser(username, password);
+    const user = await engine.auth.addUser(username.data, password.data);
     return NextResponse.json({ user }, { status: 201 });
   }
 
   const actor = await requireRole("admin");
   if (actor instanceof NextResponse) return actor;
 
-  const { username, role } = await req.json();
-  if (typeof username !== "string" || !username) {
-    return NextResponse.json({ error: "username is required" }, { status: 400 });
+  const body = await req.json();
+  const username = usernameSchema.safeParse(body.username);
+  if (!username.success) {
+    return NextResponse.json({ error: username.error.issues[0]?.message }, { status: 400 });
   }
 
+  const role = body.role;
   const requestedRole: Role = VALID_ROLES.includes(role) ? role : "user";
   if (!canAssignRole(actor.role, requestedRole)) {
     return NextResponse.json({ error: `role "${requestedRole}" cannot be granted by your account` }, { status: 403 });
   }
 
-  const { user, password } = await engine.auth.createUserWithGeneratedPassword(username, requestedRole);
+  const { user, password } = await engine.auth.createUserWithGeneratedPassword(username.data, requestedRole);
   return NextResponse.json({ user, generatedPassword: password }, { status: 201 });
 }
 

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { canAssignRole } from "@unifi-sensor-latch/shared";
+import { canAssignRole, validateUsername } from "@unifi-sensor-latch/shared";
 import type { Role, User } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 
@@ -56,8 +56,15 @@ export default function UsersPage() {
 
   async function createUser(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
     setError(null);
+
+    const usernameCheck = validateUsername(username);
+    if (!usernameCheck.valid) {
+      setError(usernameCheck.error!);
+      return;
+    }
+
+    setSaving(true);
     try {
       const res = await fetch("/api/users", {
         method: "POST",

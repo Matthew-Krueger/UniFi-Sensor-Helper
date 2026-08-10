@@ -37,12 +37,33 @@ function baseUrl(config: ProtectConfig): string {
 // app's own inbound HTTPS cert (CLAUDE.md process isolation).
 const insecureTls = { tls: { rejectUnauthorized: false } };
 
-async function protectFetch(config: ProtectConfig, path: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(`${baseUrl(config)}${path}`, {
-    ...init,
-    headers: { "X-API-KEY": config.apiKey, ...init?.headers },
-    ...insecureTls,
-  } as RequestInit);
+// An unreachable/blackholed host (wrong IP, firewalled) otherwise hangs
+// the request for the OS's TCP connect timeout — often a minute or more —
+// which blocks whatever awaited this (e.g. POST /api/consoles, so the "Add
+// console" button just spins). Every call gets a hard timeout instead of
+// relying on the caller to notice.
+const DEFAULT_TIMEOUT_MS = 8000;
+
+async function protectFetch(
+  config: ProtectConfig,
+  path: string,
+  init?: RequestInit & { timeoutMs?: number }
+): Promise<Response> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = init ?? {};
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(config)}${path}`, {
+      ...rest,
+      headers: { "X-API-KEY": config.apiKey, ...rest.headers },
+      signal: AbortSignal.timeout(timeoutMs),
+      ...insecureTls,
+    } as RequestInit);
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new Error(`Protect API ${path} timed out after ${timeoutMs}ms — is the host reachable?`);
+    }
+    throw err;
+  }
   if (!res.ok) {
     throw new Error(`Protect API ${path} failed: ${res.status} ${res.statusText}`);
   }
@@ -50,11 +71,16 @@ async function protectFetch(config: ProtectConfig, path: string, init?: RequestI
 }
 
 // Confirms the console is reachable and the API key is valid before the
-// engine commits to booting the ingest websocket.
-export async function checkConnection(config: ProtectConfig): Promise<string> {
+// engine commits to booting the ingest websocket. latencyMs is a real
+// measured round-trip, not a placeholder — the Protect API doesn't expose
+// its own latency/CPU/memory (checked against the live OpenAPI spec), so
+// this is the one honest "how's the console doing" number available.
+export async function checkConnection(config: ProtectConfig): Promise<{ applicationVersion: string; latencyMs: number }> {
+  const start = Date.now();
   const res = await protectFetch(config, "/v1/meta/info");
+  const latencyMs = Date.now() - start;
   const body = (await res.json()) as { applicationVersion: string };
-  return body.applicationVersion;
+  return { applicationVersion: body.applicationVersion, latencyMs };
 }
 
 export async function fetchRawSensors(config: ProtectConfig): Promise<RawSensor[]> {

@@ -4,29 +4,60 @@ import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { ProtectConsole, Sensor } from "@unifi-sensor-latch/shared";
+import type { ProtectConsole, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 
 // Discovery-driven — SPEC.md section 12: sensors are never hand-typed, only
 // ever listed from what /api/sensors/discover found on a configured
-// console. If no console is configured yet, this page points to Settings.
+// console. If no console is configured yet, this page points to Consoles.
+const POLL_MS = 5000;
+
+function agoLabel(timestamp: number | null): string {
+  if (!timestamp) return "never";
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  return `${Math.round(seconds / 3600)}h ago`;
+}
+
+function formatValue(metric: string, value: number): string {
+  switch (metric) {
+    case "temperature":
+      return `${value.toFixed(1)}°C`;
+    case "humidity":
+      return `${value.toFixed(0)}%`;
+    case "lux":
+      return `${value.toFixed(0)} lux`;
+    case "leak":
+      return value > 0 ? "leak detected" : "dry";
+    default:
+      return String(value);
+  }
+}
 
 export default function SensorsPage() {
   const { user: actor } = useCurrentUser();
   const canDiscover = hasRole(actor, "admin");
   const [sensors, setSensors] = React.useState<Sensor[]>([]);
+  const [statuses, setStatuses] = React.useState<SensorStatus[]>([]);
   const [consoles, setConsoles] = React.useState<ProtectConsole[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
   const load = React.useCallback(async () => {
     const [sensorsRes, consolesRes] = await Promise.all([fetch("/api/sensors"), fetch("/api/consoles")]);
-    if (sensorsRes.ok) setSensors((await sensorsRes.json()).sensors);
+    if (sensorsRes.ok) {
+      const body = await sensorsRes.json();
+      setSensors(body.sensors);
+      setStatuses(body.statuses);
+    }
     if (consolesRes.ok) setConsoles((await consolesRes.json()).consoles);
   }, []);
 
   React.useEffect(() => {
     load();
+    const id = setInterval(load, POLL_MS);
+    return () => clearInterval(id);
   }, [load]);
 
   async function refresh() {
@@ -62,7 +93,7 @@ export default function SensorsPage() {
         <Card>
           <CardHeader>
             <CardTitle>No Protect console configured</CardTitle>
-            <CardDescription>Add one on the Settings page before discovering sensors.</CardDescription>
+            <CardDescription>Add one on the Consoles page before discovering sensors.</CardDescription>
           </CardHeader>
           <CardContent />
         </Card>
@@ -76,24 +107,39 @@ export default function SensorsPage() {
         </Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {sensors.map((sensor) => (
-            <Card key={sensor.id}>
-              <CardHeader>
-                <CardTitle className="text-base">{sensor.name}</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-wrap gap-1">
-                {sensor.metrics.length === 0 ? (
-                  <span className="text-sm text-muted-foreground">No metrics enabled on this device</span>
-                ) : (
-                  sensor.metrics.map((m) => (
-                    <Badge key={m} variant="outline">
-                      {m}
+          {sensors.map((sensor) => {
+            const status = statuses.find((s) => s.sensorId === sensor.id);
+            return (
+              <Card key={sensor.id}>
+                <CardHeader>
+                  <div className="flex items-center justify-between gap-2">
+                    <CardTitle className="text-base">{sensor.name}</CardTitle>
+                    <Badge variant={status?.lastSeenAt ? "outline" : "idle"}>
+                      {status?.lastSeenAt ? "reporting" : "no data yet"}
                     </Badge>
-                  ))
-                )}
-              </CardContent>
-            </Card>
-          ))}
+                  </div>
+                  <CardDescription>Last contacted: {agoLabel(status?.lastSeenAt ?? null)}</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-2">
+                  {sensor.metrics.length === 0 ? (
+                    <span className="text-sm text-muted-foreground">No metrics enabled on this device</span>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {sensor.metrics.map((m) => {
+                        const value = status?.values[m];
+                        return (
+                          <Badge key={m} variant="outline">
+                            {m}
+                            {value != null ? `: ${formatValue(m, value)}` : ""}
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

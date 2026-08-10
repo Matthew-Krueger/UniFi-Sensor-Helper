@@ -21,6 +21,26 @@ not what to build.
   this rule is about you, the coding agent, not about the running
   service. The service is supposed to read its own config.
 
+## Trust boundaries
+
+Treat every request to the app — API route, form submission, whatever —
+as if it could be from a hostile actor, not just a careless one. This
+governs two things:
+
+- **Authorization**: never rely on "the UI wouldn't let them do that."
+  Every Route Handler must independently verify who's asking and what
+  they're allowed to do (`requireRole` in `apps/web/lib/auth.ts`) before
+  doing anything, regardless of what the client-side code checks.
+- **Input validation**: validate on both sides, always — client-side
+  validation is a UX nicety (immediate feedback), never the actual gate.
+  The server-side check is what's non-negotiable. Shared validation logic
+  (e.g. `packages/shared/src/validation.ts`) exists precisely so the two
+  can't drift apart — both sides call the same function, not two
+  hand-maintained copies of the same rule.
+- When in doubt about whether something needs validating, validate it.
+  Unbounded string lengths, unexpected types, and untrusted IDs used in
+  lookups are the recurring mistakes to watch for.
+
 ## Secret obfuscation
 
 Any value that could be a credential — API keys, the admin password, and
