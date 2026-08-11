@@ -13,6 +13,7 @@ import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
 import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
 import { reportingBadge } from "@/lib/reportingBadge";
 import { celsiusToFahrenheit } from "@/lib/units";
+import { sensorsResponseSchema, consolesResponseSchema } from "@/lib/apiSchemas";
 
 // Discovery-driven — SPEC.md section 12: sensors are never hand-typed, only
 // ever listed from what /api/sensors/discover found on a configured
@@ -147,7 +148,7 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
     queryFn: async () => {
       const res = await fetch("/api/sensors");
       if (!res.ok) throw new Error("failed to load sensors");
-      return (await res.json()) as { sensors: Sensor[]; statuses: SensorStatus[] };
+      return sensorsResponseSchema.parse(await res.json());
     },
     initialData: { sensors: initial.sensors, statuses: initial.statuses },
     refetchInterval: paused ? false : POLL_MS,
@@ -157,7 +158,7 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
     queryFn: async () => {
       const res = await fetch("/api/consoles");
       if (!res.ok) throw new Error("failed to load consoles");
-      return (await res.json()) as { consoles: ProtectConsole[]; statuses: ConsoleStatus[] };
+      return consolesResponseSchema.parse(await res.json());
     },
     initialData: { consoles: initial.consoles, statuses: initial.consoleStatuses },
     refetchInterval: paused ? false : POLL_MS,

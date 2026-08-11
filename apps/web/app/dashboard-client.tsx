@@ -9,6 +9,7 @@ import { absoluteTimeLabel, formatDuration, preciseAgoLabel, useNowTick } from "
 import { conditionSummary } from "@unifi-sensor-latch/shared";
 import { metricUnitSuffix, toDisplayCondition } from "@/lib/units";
 import { useCurrentUser } from "@/lib/useCurrentUser";
+import { sensorsResponseSchema } from "@/lib/apiSchemas";
 
 // Client Component polling /api/state every few seconds — SPEC.md section 5:
 // latch state changes on the order of minutes, so polling is simpler than a
@@ -39,10 +40,20 @@ function useLiveState(initial: DashboardInitialData) {
     initialData: initial.rules,
     refetchInterval: POLL_MS,
   });
+  // The "sensors" query key is shared with the Sensors/Rules/Consoles
+  // pages via the one app-wide QueryClient (see components/query-provider.tsx)
+  // — they all fetch and cache the same full /api/sensors body so the
+  // shape matches everywhere the key is used, rather than each page
+  // caching a different narrowed slice under the same key and clobbering
+  // each other's cache entry.
   const sensors = useQuery({
     queryKey: ["sensors"],
-    queryFn: () => fetchJson<Sensor[]>("/api/sensors", "sensors"),
-    initialData: initial.sensors,
+    queryFn: async () => {
+      const res = await fetch("/api/sensors");
+      if (!res.ok) throw new Error("failed to load sensors");
+      return sensorsResponseSchema.parse(await res.json());
+    },
+    initialData: { sensors: initial.sensors, statuses: [] },
     refetchInterval: POLL_MS,
   });
   const states = useQuery({
@@ -52,7 +63,7 @@ function useLiveState(initial: DashboardInitialData) {
     refetchInterval: POLL_MS,
   });
 
-  return { rules: rules.data, sensors: sensors.data, states: states.data };
+  return { rules: rules.data, sensors: sensors.data.sensors, states: states.data };
 }
 
 export function DashboardClient({ initial }: { initial: DashboardInitialData }) {

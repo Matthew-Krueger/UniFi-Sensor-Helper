@@ -19,6 +19,7 @@ import {
   webhookFormValueFromTarget,
   type WebhookFormValue,
 } from "@/components/webhook-fields-editor";
+import { consolesResponseSchema } from "@/lib/apiSchemas";
 
 // Longer-scale presets than a rule's DURATION_PRESETS (shared/src/
 // interval.ts, capped at 1 hour) — a console going quiet for an hour is
@@ -110,7 +111,7 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
     queryFn: async () => {
       const res = await fetch("/api/consoles");
       if (!res.ok) throw new Error("failed to load consoles");
-      return (await res.json()) as { consoles: ProtectConsole[]; statuses: ConsoleStatus[] };
+      return consolesResponseSchema.parse(await res.json());
     },
     initialData: { consoles: initial.consoles, statuses: initial.statuses },
     refetchInterval: (query) => {

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { validatePassword } from "@unifi-sensor-latch/shared";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 
 // Forced landing page for any account with mustResetPassword set — either
 // admin-created (generated password, never seen by the account owner
@@ -14,6 +15,7 @@ import { validatePassword } from "@unifi-sensor-latch/shared";
 // password in the invalidate-only case.
 export default function ResetPasswordPage() {
   const router = useRouter();
+  const { setUser } = useCurrentUser();
   const [currentPassword, setCurrentPassword] = React.useState("");
   const [newPassword, setNewPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
@@ -42,6 +44,11 @@ export default function ResetPasswordPage() {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "failed to change password");
+      // Update the shared session context immediately — otherwise it still
+      // holds the stale mustResetPassword: true until the next 5s poll,
+      // and SessionGuard bounces straight back to this page before that
+      // poll ever runs.
+      setUser(body.user);
       router.push("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

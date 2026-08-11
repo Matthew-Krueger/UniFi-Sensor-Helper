@@ -25,5 +25,5 @@ export async function PATCH(req: NextRequest) {
   const ok = await getEngine().auth.changePassword(actor.id, body.currentPassword, newPassword.data);
   if (!ok) return NextResponse.json({ error: "current password is incorrect" }, { status: 401 });
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, user: getEngine().auth.getUser(actor.id) });
 }

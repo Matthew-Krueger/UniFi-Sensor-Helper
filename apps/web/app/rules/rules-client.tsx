@@ -16,6 +16,7 @@ import type {
   RuleCondition,
   Sensor,
   SensorStatus,
+  ConsoleStatus,
   WebhookDelivery,
   WebhookTarget,
 } from "@unifi-sensor-latch/shared";
@@ -38,6 +39,7 @@ import {
   webhookFormValueFromTarget,
   type WebhookFormValue,
 } from "@/components/webhook-fields-editor";
+import { sensorsResponseSchema, consolesResponseSchema } from "@/lib/apiSchemas";
 
 // CRUD over /api/latches — "Rule" is the user-facing name for what the
 // domain model (SPEC.md section 4) and API still call a Latch internally;
@@ -408,7 +410,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
     queryFn: async () => {
       const res = await fetch("/api/sensors");
       if (!res.ok) throw new Error("failed to load sensors");
-      return (await res.json()) as { sensors: Sensor[]; statuses: SensorStatus[] };
+      return sensorsResponseSchema.parse(await res.json());
     },
     initialData: { sensors: initial.sensors, statuses: initial.sensorStatuses },
     refetchInterval: dialogOpen ? 5000 : false,
@@ -420,16 +422,20 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
     [queryClient]
   );
 
+  // The "consoles" query key is shared with the Sensors/Consoles pages
+  // via the one app-wide QueryClient — cache the same full /api/consoles
+  // body everywhere the key is used (see the "sensors" query's comment on
+  // dashboard-client.tsx for why), not a page-specific narrowed slice.
   const consolesQuery = useQuery({
     queryKey: ["consoles"],
     queryFn: async () => {
       const res = await fetch("/api/consoles");
       if (!res.ok) throw new Error("failed to load consoles");
-      return (await res.json()).consoles as ProtectConsole[];
+      return consolesResponseSchema.parse(await res.json());
     },
-    initialData: initial.consoles,
+    initialData: { consoles: initial.consoles, statuses: [] },
   });
-  const consoles = consolesQuery.data;
+  const consoles = consolesQuery.data.consoles;
 
   // Delivery history is admin-only server-side (CLAUDE.md) — don't even
   // attempt the fetch for a read-only "user" session.
