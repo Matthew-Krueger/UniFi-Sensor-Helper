@@ -9,7 +9,7 @@ care," with independent arm/clear thresholds per (sensor, metric) pair. See
 **AI USE**: This code was completely AI generated.... Is it better than
 human written code? Yup! Is Linus Torvalds right about AI? You bet!
 Is it better than anything I can write! Yup! And was it written way faster?
-Also yup! This paragraph was the only human written part of th eentire repo.
+Also yup! This paragraph was the only human written part of the entire repo.
 Not even the rest of the readme was human written. Claude gets a pat
 on the back for that.
 
