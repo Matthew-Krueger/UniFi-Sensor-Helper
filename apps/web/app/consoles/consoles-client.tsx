@@ -6,17 +6,34 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import type { ConsoleStatus, ProtectConsole } from "@unifi-sensor-latch/shared";
-import { DURATION_PRESETS, buildConsoleWebhookUrl } from "@unifi-sensor-latch/shared";
+import type { ConsoleStatus, ProtectConsole, WebhookTarget } from "@unifi-sensor-latch/shared";
+import { buildConsoleWebhookUrl, validateWebhookTarget } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
-import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { absoluteTimeLabel, formatDuration, preciseAgoLabel, useNowTick } from "@/lib/format";
+import {
+  WebhookFieldsEditor,
+  buildWebhookTarget,
+  emptyWebhookFormValue,
+  webhookFormValueFromTarget,
+  type WebhookFormValue,
+} from "@/components/webhook-fields-editor";
 
-// Reuses the same Unifi-matched preset list Rules use for durations —
-// "how often do we expect a sensor to report" and "how long must a rule
-// stay armed" are the same kind of duration, so one dropdown vocabulary
-// for both. 5 minutes is the column default (schema.ts).
-const INTERVAL_PRESETS = DURATION_PRESETS;
+// Longer-scale presets than a rule's DURATION_PRESETS (shared/src/
+// interval.ts, capped at 1 hour) — a console going quiet for an hour is
+// business as usual overnight on a low-traffic site, so "how long before
+// I worry this console itself is down" wants a wider range than "how long
+// before I worry about a specific reading."
+const DOWN_ALERT_DURATION_PRESETS: { label: string; seconds: number }[] = [
+  { label: "5 minutes", seconds: 300 },
+  { label: "15 minutes", seconds: 900 },
+  { label: "30 minutes", seconds: 1800 },
+  { label: "1 hour", seconds: 3600 },
+  { label: "2 hours", seconds: 7200 },
+  { label: "6 hours", seconds: 21600 },
+  { label: "12 hours", seconds: 43200 },
+  { label: "24 hours", seconds: 86400 },
+];
 
 // Protect console connections — never in .env, since a site can have more
 // than one (see packages/engine/src/schema.ts). The API key field is
@@ -88,9 +105,13 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
   const [name, setName] = React.useState("");
   const [host, setHost] = React.useState("");
   const [apiKey, setApiKey] = React.useState("");
-  const [defaultIntervalSeconds, setDefaultIntervalSeconds] = React.useState(300);
   const [defaultWebhookId, setDefaultWebhookId] = React.useState("");
   const [apiBaseUrlOverride, setApiBaseUrlOverride] = React.useState("");
+  const [downAlertEnabled, setDownAlertEnabled] = React.useState(false);
+  const [downAlertDurationSeconds, setDownAlertDurationSeconds] = React.useState<number | "">("");
+  const [downAlertWebhook, setDownAlertWebhook] = React.useState<WebhookFormValue>(emptyWebhookFormValue());
+  const [downAlertResolvedEnabled, setDownAlertResolvedEnabled] = React.useState(false);
+  const [downAlertResolvedWebhook, setDownAlertResolvedWebhook] = React.useState<WebhookFormValue>(emptyWebhookFormValue());
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [savingMessage, setSavingMessage] = React.useState<string | null>(null);
@@ -131,9 +152,19 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
     setName("");
     setHost("");
     setApiKey("");
-    setDefaultIntervalSeconds(300);
     setDefaultWebhookId("");
     setApiBaseUrlOverride("");
+    setDownAlertEnabled(false);
+    setDownAlertDurationSeconds("");
+    // Deliberately NOT prefilled with this console's own id: a "console
+    // down" webhook that targets the down console itself would also fail
+    // to deliver — see the doc comment on ProtectConsole.downAlertWebhook.
+    // The operator picks explicitly (a different console, or a custom
+    // external URL) rather than the picker silently defaulting to the one
+    // console guaranteed not to work.
+    setDownAlertWebhook(emptyWebhookFormValue());
+    setDownAlertResolvedEnabled(false);
+    setDownAlertResolvedWebhook(emptyWebhookFormValue());
   }
 
   function openAddDialog() {
@@ -147,9 +178,13 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
     setName(c.name);
     setHost(c.host);
     setApiKey(""); // never round-tripped — see PATCH /api/consoles/[id]'s comment
-    setDefaultIntervalSeconds(c.defaultIntervalSeconds);
     setDefaultWebhookId(c.defaultWebhookId ?? "");
     setApiBaseUrlOverride(c.apiBaseUrlOverride ?? "");
+    setDownAlertEnabled(c.downAlertEnabled);
+    setDownAlertDurationSeconds(c.downAlertDurationSeconds ?? "");
+    setDownAlertWebhook(webhookFormValueFromTarget(c.downAlertWebhook));
+    setDownAlertResolvedEnabled(c.downAlertResolvedWebhook != null);
+    setDownAlertResolvedWebhook(webhookFormValueFromTarget(c.downAlertResolvedWebhook));
     setEditingId(c.id);
     setError(null);
     setOpen(true);
@@ -161,16 +196,42 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
     setSavingMessage(editingId ? `Saving "${name}"…` : `Attempting to add console "${name}"…`);
     setError(null);
     try {
+      let downAlertWebhookTarget: WebhookTarget | undefined;
+      let downAlertResolvedWebhookTarget: WebhookTarget | undefined;
+      if (downAlertEnabled) {
+        if (downAlertDurationSeconds === "") throw new Error("pick a down-alert duration");
+        downAlertWebhookTarget = buildWebhookTarget(downAlertWebhook);
+        const check = validateWebhookTarget(downAlertWebhookTarget);
+        if (!check.valid) throw new Error(check.error);
+        if (downAlertResolvedEnabled) {
+          downAlertResolvedWebhookTarget = buildWebhookTarget(downAlertResolvedWebhook);
+          const resolvedCheck = validateWebhookTarget(downAlertResolvedWebhookTarget);
+          if (!resolvedCheck.valid) throw new Error(resolvedCheck.error);
+        }
+      }
+
+      const payload = {
+        name,
+        host,
+        apiKey,
+        defaultWebhookId,
+        apiBaseUrlOverride,
+        downAlertEnabled,
+        downAlertDurationSeconds: downAlertEnabled ? downAlertDurationSeconds : null,
+        downAlertWebhook: downAlertWebhookTarget ?? null,
+        downAlertResolvedWebhook: downAlertResolvedWebhookTarget ?? null,
+      };
+
       const res = editingId
         ? await fetch(`/api/consoles/${editingId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, host, apiKey, defaultIntervalSeconds, defaultWebhookId, apiBaseUrlOverride }),
+            body: JSON.stringify(payload),
           })
         : await fetch("/api/consoles", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, host, apiKey, defaultIntervalSeconds, defaultWebhookId, apiBaseUrlOverride }),
+            body: JSON.stringify(payload),
           });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "failed to save console");
@@ -188,15 +249,6 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
 
   async function removeConsole(id: string) {
     await fetch(`/api/consoles/${id}`, { method: "DELETE" });
-    await load();
-  }
-
-  async function updateDefaultInterval(id: string, seconds: number) {
-    await fetch(`/api/consoles/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ defaultIntervalSeconds: seconds }),
-    });
     await load();
   }
 
@@ -245,20 +297,6 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
               />
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Default expected interval</label>
-              <select
-                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                value={defaultIntervalSeconds}
-                onChange={(e) => setDefaultIntervalSeconds(Number(e.target.value))}
-              >
-                {INTERVAL_PRESETS.map((p) => (
-                  <option key={p.seconds} value={p.seconds}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
               <label className="text-xs text-muted-foreground">Default Alarm Manager webhook ID (optional)</label>
               <Input
                 value={defaultWebhookId}
@@ -288,6 +326,78 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
                 this only if you need to reach the console through something else instead, e.g. UniFi's
                 remote/cloud API base. Leave blank to use the default.
               </p>
+            </div>
+            <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="downAlertEnabled"
+                  checked={downAlertEnabled}
+                  onChange={(e) => setDownAlertEnabled(e.target.checked)}
+                />
+                <label htmlFor="downAlertEnabled" className="text-xs text-muted-foreground">
+                  Alert if this console goes silent
+                </label>
+              </div>
+              {downAlertEnabled && (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Fires once no reading has come in from this console for the chosen duration — catches a
+                    connection that's silently stopped delivering, separate from the connection-state badge above.
+                  </p>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground">Alert after no contact for</label>
+                    <select
+                      className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                      value={downAlertDurationSeconds}
+                      onChange={(e) => setDownAlertDurationSeconds(Number(e.target.value))}
+                      required
+                    >
+                      <option value="" disabled>
+                        Select a duration
+                      </option>
+                      {DOWN_ALERT_DURATION_PRESETS.map((p) => (
+                        <option key={p.seconds} value={p.seconds}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <WebhookFieldsEditor
+                    label="Webhook (console down)"
+                    value={downAlertWebhook}
+                    onChange={setDownAlertWebhook}
+                    consoles={consoles}
+                    editing={editingId != null}
+                    bodyTemplatePlaceholders={["{{consoleName}}", "{{status}}", "{{silentForMinutes}}"]}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    If this console is the one that's down, a webhook that also has to reach it won't deliver
+                    either — point this at a different console or a custom external URL, not this one.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="downAlertResolvedEnabled"
+                      checked={downAlertResolvedEnabled}
+                      onChange={(e) => setDownAlertResolvedEnabled(e.target.checked)}
+                    />
+                    <label htmlFor="downAlertResolvedEnabled" className="text-xs text-muted-foreground">
+                      Also send a webhook once contact resumes
+                    </label>
+                  </div>
+                  {downAlertResolvedEnabled && (
+                    <WebhookFieldsEditor
+                      label="Webhook (console back up)"
+                      value={downAlertResolvedWebhook}
+                      onChange={setDownAlertResolvedWebhook}
+                      consoles={consoles}
+                      editing={editingId != null}
+                      bodyTemplatePlaceholders={["{{consoleName}}", "{{status}}"]}
+                    />
+                  )}
+                </>
+              )}
             </div>
             {error && <p className="text-sm text-red-600">{error}</p>}
             <Button type="submit" disabled={saving}>
@@ -347,26 +457,21 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
                   <div title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined} suppressHydrationWarning>
                     Last contacted: {preciseAgoLabel(status?.lastEventAt ?? null)}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span>Default expected interval:</span>
-                    {canManage ? (
-                      <select
-                        className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground"
-                        value={c.defaultIntervalSeconds}
-                        onChange={(e) => updateDefaultInterval(c.id, Number(e.target.value))}
-                      >
-                        {INTERVAL_PRESETS.map((p) => (
-                          <option key={p.seconds} value={p.seconds}>
-                            {p.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span>{INTERVAL_PRESETS.find((p) => p.seconds === c.defaultIntervalSeconds)?.label ?? `${c.defaultIntervalSeconds}s`}</span>
-                    )}
-                  </div>
                   <div>
                     Default webhook ID: {c.defaultWebhookId ?? <span className="italic">not set</span>}
+                  </div>
+                  <div>
+                    Down alert:{" "}
+                    {c.downAlertEnabled ? (
+                      <>
+                        after {formatDuration(c.downAlertDurationSeconds ?? 0)} silent
+                        {status?.downAlertFired && (
+                          <span className="ml-1 font-medium text-red-600 dark:text-red-400">— currently firing</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="italic">off</span>
+                    )}
                   </div>
                   {status?.applicationVersion && <div>Firmware: {status.applicationVersion}</div>}
                   {status?.latencyMs != null && <div>API latency: {status.latencyMs}ms</div>}

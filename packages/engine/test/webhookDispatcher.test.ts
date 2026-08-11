@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Latch } from "@unifi-sensor-latch/shared";
-import { dispatchWebhook, type ResolvedWebhookTarget } from "../src/webhookDispatcher";
+import { dispatchWebhook, dispatchWebhookWithVars, type ResolvedWebhookTarget } from "../src/webhookDispatcher";
 
 // dispatchWebhook takes an already-resolved target (see
 // resolveWebhookTarget.test.ts for the "console" kind -> concrete URL
@@ -91,6 +91,29 @@ describe("dispatchWebhook", () => {
     await dispatchWebhook(target, { latch, sensorName: "Walk-in Freezer", value: 60 }, fakeFetch as any);
 
     expect(capturedBody).toBe("Walk-in Freezer temperature is 60 (threshold 55, armed 10m)");
+  });
+
+  test("dispatchWebhookWithVars substitutes a plain vars map, no Latch needed", async () => {
+    let capturedBody: string | undefined;
+    const fakeFetch = async (_url: string, init: RequestInit) => {
+      capturedBody = init.body as string;
+      return new Response(null, { status: 200 });
+    };
+
+    const target: ResolvedWebhookTarget = {
+      url: "https://example.invalid/webhook",
+      method: "POST",
+      bodyTemplate: "{{consoleName}} has been silent for {{silentForMinutes}}m ({{status}})",
+    };
+
+    const result = await dispatchWebhookWithVars(
+      target,
+      { consoleName: "Main site NVR", status: "down", silentForMinutes: "17" },
+      fakeFetch as any
+    );
+
+    expect(result.ok).toBe(true);
+    expect(capturedBody).toBe("Main site NVR has been silent for 17m (down)");
   });
 
   test("never logs the full webhook URL, even one embedding a token", async () => {

@@ -30,10 +30,6 @@ export interface ProtectConsole {
   // than a direct LAN path (e.g. UniFi's remote/cloud API base) instead of
   // the console's own local address. Null means "derive it from host".
   apiBaseUrlOverride: string | null;
-  // Default expected reporting interval (seconds) for sensors on this
-  // console with no per-sensor override and no observed data yet. See
-  // packages/shared/src/interval.ts.
-  defaultIntervalSeconds: number;
   // Default Alarm Manager webhook ID for this console (SPEC.md section 7
   // — a manual, one-time setup step per site: one "trigger via webhook"
   // Alarm Manager rule in Protect's own UI, whose ID goes here). Prefills
@@ -43,6 +39,27 @@ export interface ProtectConsole {
   // Alarm Manager rule for the resolved event), this is just the
   // convenient default. Null until the operator sets one.
   defaultWebhookId: string | null;
+  // "This console has gone dark" alert — a plain, operator-set duration
+  // dead-man's-switch on top of ConsoleStatus.lastEventAt, independent of
+  // the real-time connectionState transitions the websocket already
+  // provides (see singleton.ts's downAlert timer): it catches a
+  // connection that looks open but has silently stopped delivering
+  // anything, which a state transition alone wouldn't. Deliberately a
+  // flat duration, not a multiplier of some per-console baseline — see
+  // the removal of ProtectConsole.defaultIntervalSeconds; there's no
+  // single "normal contact time" left to multiply once that went away.
+  // downAlertWebhook defaults to targeting *this* console in the UI for
+  // convenience, but operators are steered toward pointing it somewhere
+  // else (a different console, or a custom external URL) — if this
+  // console is the one that's down, a webhook that also has to reach
+  // this console to deliver will fail for the same reason.
+  downAlertEnabled: boolean;
+  downAlertDurationSeconds: number | null;
+  downAlertWebhook: WebhookTarget | null;
+  // Fires once contact resumes after a down alert fired — mirrors a
+  // rule's fired/resolvedWebhook pair. Optional even when downAlertEnabled
+  // is true: an operator may only care about the "it's down" ping.
+  downAlertResolvedWebhook: WebhookTarget | null;
   createdAt: number;
 }
 
@@ -147,6 +164,11 @@ export interface ConsoleStatus {
   sensorCount: number;
   error: string | null;
   steps: ConsoleStatusStep[];
+  // True while this console's down-alert has fired and hasn't cleared yet
+  // (see singleton.ts's checkDownAlerts) — always false when
+  // downAlertEnabled is off. Surfaced so the Consoles page can show it
+  // without duplicating the timeout math client-side.
+  downAlertFired: boolean;
 }
 
 export interface SensorStatus {

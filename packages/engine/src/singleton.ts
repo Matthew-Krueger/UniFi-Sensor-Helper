@@ -5,6 +5,7 @@ import type {
   Reading,
   SensorStatus,
   WebhookDelivery,
+  WebhookTarget,
 } from "@unifi-sensor-latch/shared";
 import { AuthStore } from "./auth";
 import { ConfigStore } from "./config";
@@ -17,7 +18,7 @@ import {
   subscribeDevices,
   type DeviceSubscription,
 } from "./protect";
-import { dispatchWebhook } from "./webhookDispatcher";
+import { dispatchWebhook, dispatchWebhookWithVars } from "./webhookDispatcher";
 import { resolveWebhookTarget } from "./resolveWebhookTarget";
 import { applyReading, initialState } from "./stateMachine";
 
@@ -41,13 +42,14 @@ export class LatchEngine {
   // sensor touch — see scheduleActivePull.
   private activePullTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private static readonly ACTIVE_PULL_DEBOUNCE_MS = 3000;
-  // Safety poll cadence is a generous multiple of the console's own
-  // default interval, with a floor — CLAUDE.md: don't poll faster than the
-  // sensor's own reporting interval "just in case". This is deliberately
-  // much slower than that floor since it's a fallback, not the primary
-  // sync path.
-  private static readonly SAFETY_POLL_MULTIPLIER = 4;
-  private static readonly SAFETY_POLL_FLOOR_SECONDS = 900; // 15 minutes
+  // Safety poll cadence — deliberately slow, since it's a fallback for
+  // "the websocket went quiet without telling us," not the primary sync
+  // path (that's the debounced active pull — see scheduleActivePull).
+  // Flat rather than derived from any per-console setting: there used to
+  // be an operator-configurable "default expected interval" here, removed
+  // once observedCheckinIntervalSeconds made it redundant for its other
+  // job (staleness badges) — see shared/src/interval.ts.
+  private static readonly SAFETY_POLL_SECONDS = 900; // 15 minutes
   // In-memory only, per ConsoleStatus/SensorStatus's doc comment (shared
   // types) — this is "is it alive right now", not a persisted history.
   private consoleStatuses = new Map<string, ConsoleStatus>();
@@ -70,6 +72,24 @@ export class LatchEngine {
   // every round just because it isn't published yet.
   private checkinEstimateSeconds = new Map<string, number>();
 
+  // "This console has gone dark" dead-man's-switch — a timer, not a
+  // reaction to a websocket event, since the whole point is catching a
+  // connection that never tells us it broke (see ProtectConsole's
+  // downAlertEnabled doc comment for why this is separate from the
+  // real-time connectionState transitions already pushed by
+  // subscribeDevices' status callback). Checked on a flat interval across
+  // every console with it enabled, rather than one setTimeout per
+  // console, so enabling/disabling/reconfiguring it never has to touch a
+  // timer — the next tick just reads whatever's current in config.
+  private static readonly DOWN_ALERT_CHECK_INTERVAL_MS = 30_000;
+  private downAlertTimer: ReturnType<typeof setInterval> | null = null;
+  // consoleIds currently in a fired down-alert state — in-memory only,
+  // same lifetime rule as ConsoleStatus/SensorStatus (see their doc
+  // comments): a restart re-derives it from lastEventAt on the next
+  // check rather than persisting it, so a restart can never get stuck
+  // thinking a console is down when the process just doesn't know yet.
+  private downAlertFired = new Set<string>();
+
   async boot(): Promise<void> {
     if (this.auth.count() === 0) {
       console.log("[auth] no accounts exist yet — sign-up is open until the first account is created");
@@ -79,7 +99,68 @@ export class LatchEngine {
       await this.connectConsole(console_);
     }
 
+    if (!this.downAlertTimer) {
+      this.downAlertTimer = setInterval(() => this.checkDownAlerts(), LatchEngine.DOWN_ALERT_CHECK_INTERVAL_MS);
+    }
+
     console.log("[engine] booted");
+  }
+
+  // Compares each down-alert-enabled console's silence (now - lastEventAt)
+  // against its configured duration. Skips a console with no lastEventAt
+  // yet (never heard from it at all) — that's not a "went silent" case,
+  // it's "hasn't said anything yet," which connectionState already
+  // surfaces immediately via the connect-time probe (see connectConsole);
+  // this timer's job is specifically the zombie-connection case where
+  // something *was* heard and then silently stopped.
+  private checkDownAlerts(): void {
+    const now = Date.now();
+    for (const console_ of this.config.listProtectConsoles()) {
+      if (!console_.downAlertEnabled || !console_.downAlertDurationSeconds || !console_.downAlertWebhook) continue;
+
+      const lastEventAt = this.consoleStatuses.get(console_.id)?.lastEventAt ?? null;
+      if (lastEventAt == null) continue;
+
+      const silentMs = now - lastEventAt;
+      const isDown = silentMs >= console_.downAlertDurationSeconds * 1000;
+      const wasFired = this.downAlertFired.has(console_.id);
+
+      if (isDown && !wasFired) {
+        this.downAlertFired.add(console_.id);
+        this.setConsoleStatus(console_.id, { downAlertFired: true });
+        void this.dispatchDownAlert(console_, console_.downAlertWebhook, "down", silentMs);
+      } else if (!isDown && wasFired) {
+        this.downAlertFired.delete(console_.id);
+        this.setConsoleStatus(console_.id, { downAlertFired: false });
+        if (console_.downAlertResolvedWebhook) {
+          void this.dispatchDownAlert(console_, console_.downAlertResolvedWebhook, "back up", 0);
+        }
+      }
+    }
+  }
+
+  private async dispatchDownAlert(
+    console_: ProtectConsole,
+    target: WebhookTarget,
+    status: "down" | "back up",
+    silentMs: number
+  ): Promise<void> {
+    let resolved;
+    try {
+      resolved = resolveWebhookTarget(target, this.config);
+    } catch (err) {
+      console.error(`[engine] down-alert webhook for console "${console_.name}" targets a console that no longer exists:`, err);
+      return;
+    }
+
+    const result = await dispatchWebhookWithVars(resolved, {
+      consoleName: console_.name,
+      status,
+      silentForMinutes: String(Math.round(silentMs / 60000)),
+    });
+    if (!result.ok) {
+      console.error(`[engine] down-alert webhook for console "${console_.name}" (${status}) failed: ${result.error}`);
+    }
   }
 
   // Connects to one Protect console: does an initial sensor discovery pass
@@ -153,9 +234,7 @@ export class LatchEngine {
     // debounced pull on every touch is what actually keeps values fresh;
     // this interval only covers the case where the websocket goes quiet
     // without an explicit disconnect event.
-    const safetyPollMs =
-      Math.max(consoleConfig.defaultIntervalSeconds * LatchEngine.SAFETY_POLL_MULTIPLIER, LatchEngine.SAFETY_POLL_FLOOR_SECONDS) *
-      1000;
+    const safetyPollMs = LatchEngine.SAFETY_POLL_SECONDS * 1000;
     const timer = setInterval(() => {
       this.discoverSensors(consoleConfig).catch((err) => {
         console.error(`[engine] safety-net re-discovery failed for console "${consoleConfig.name}":`, err);
@@ -248,6 +327,11 @@ export class LatchEngine {
     clearTimeout(this.activePullTimers.get(consoleId));
     this.activePullTimers.delete(consoleId);
     this.pendingTouchedSensorIds.delete(consoleId);
+    // Deleted or reconnecting — either way, re-derive from lastEventAt on
+    // the next checkDownAlerts tick rather than carrying a stale "fired"
+    // flag forward (harmless for a genuine reconnect: it just re-fires if
+    // still actually down).
+    this.downAlertFired.delete(consoleId);
   }
 
   // Merges in the latest known battery reading — called for every sensor
@@ -317,6 +401,7 @@ export class LatchEngine {
       sensorCount: 0,
       error: null,
       steps: [],
+      downAlertFired: false,
     };
     this.consoleStatuses.set(consoleId, { ...current, ...patch });
   }

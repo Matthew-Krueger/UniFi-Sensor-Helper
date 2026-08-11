@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type {
   Latch,
@@ -22,7 +21,6 @@ import type {
 import {
   DURATION_PRESETS,
   MIN_DURATION_SECONDS,
-  buildConsoleWebhookUrl,
   conditionSummary,
   isDurationValid,
   validateCondition,
@@ -32,6 +30,13 @@ import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { metricUnitSuffix, toDisplayCondition, toStoredValue } from "@/lib/units";
 import { absoluteTimeLabel, coarseAgoLabel, formatDuration, preciseAgoLabel, useNowTick } from "@/lib/format";
 import { reportingBadge } from "@/lib/reportingBadge";
+import {
+  WebhookFieldsEditor,
+  buildWebhookTarget,
+  emptyWebhookFormValue,
+  webhookFormValueFromTarget,
+  type WebhookFormValue,
+} from "@/components/webhook-fields-editor";
 
 // CRUD over /api/latches — "Rule" is the user-facing name for what the
 // domain model (SPEC.md section 4) and API still call a Latch internally;
@@ -46,7 +51,7 @@ export type RuleRow = Omit<Latch, "webhook" | "resolvedWebhook"> & {
   resolvedWebhook?: Latch["resolvedWebhook"];
 };
 
-type ConditionType = "above" | "below" | "between";
+type ConditionType = "above" | "below" | "between" | "outside";
 type HysteresisMode = "manual" | "auto";
 
 // Form-local shape for one webhook (fired or resolved) — flat so every
@@ -56,55 +61,6 @@ type HysteresisMode = "manual" | "auto";
 // it's this app's primary intended path (SPEC.md section 7 — Protect's
 // own Alarm Manager does the actual notification delivery), not just one
 // option among equals.
-interface WebhookFormValue {
-  kind: "console" | "custom";
-  consoleId: string;
-  webhookId: string;
-  url: string;
-  method: "GET" | "POST";
-  bearerToken: string; // never prefilled on edit — see openEditDialog
-  bodyTemplate: string; // custom-only; unlike bearerToken this isn't a secret, so it IS prefilled on edit
-}
-
-function emptyWebhookFormValue(): WebhookFormValue {
-  return { kind: "console", consoleId: "", webhookId: "", url: "", method: "POST", bearerToken: "", bodyTemplate: "" };
-}
-
-// bearerToken is deliberately left blank even when editing an existing
-// custom webhook that has one — GET /api/latches always masks it (see
-// latchRedaction.ts), so there's no real value to prefill; the field's
-// placeholder explains that blank means "keep the existing token."
-// bodyTemplate isn't credential-bearing (latchRedaction.ts passes it
-// through unmasked), so it's safe to prefill from the real stored value.
-function webhookFormValueFromTarget(target: WebhookTarget | undefined): WebhookFormValue {
-  if (!target) return emptyWebhookFormValue();
-  if (target.kind === "console") {
-    return { kind: "console", consoleId: target.consoleId, webhookId: target.webhookId, url: "", method: "POST", bearerToken: "", bodyTemplate: "" };
-  }
-  return {
-    kind: "custom",
-    consoleId: "",
-    webhookId: "",
-    url: target.url,
-    method: target.method,
-    bearerToken: "",
-    bodyTemplate: target.bodyTemplate ?? "",
-  };
-}
-
-function buildWebhookTarget(v: WebhookFormValue): WebhookTarget {
-  if (v.kind === "console") {
-    return { kind: "console", consoleId: v.consoleId, webhookId: v.webhookId };
-  }
-  return {
-    kind: "custom",
-    url: v.url,
-    method: v.method,
-    bearerToken: v.bearerToken || undefined,
-    bodyTemplate: v.bodyTemplate || undefined,
-  };
-}
-
 // Duration can be picked from the Unifi-matched preset list or typed as
 // an arbitrary DD:HH:MM — the server only ever validates the resulting
 // total seconds against the flat MIN_DURATION_SECONDS floor (see
@@ -127,7 +83,34 @@ function secondsToParts(totalSeconds: number): { days: string; hours: string; mi
 }
 
 function partsToSeconds(days: string, hours: string, minutes: string, seconds: string): number {
-  return (Number(days) || 0) * 86400 + (Number(hours) || 0) * 3600 + (Number(minutes) || 0) * 60 + (Number(seconds) || 0);
+  const part = (v: string) => Math.max(0, Number(v) || 0);
+  return part(days) * 86400 + part(hours) * 3600 + part(minutes) * 60 + part(seconds);
+}
+
+// type="number" inputs still accept "-", "e", and stray characters from
+// the keyboard even with min={0} set — the browser only enforces min/max
+// on the spinner arrows, not on typed input, and a bare Number(str) on a
+// value like "" or "-" silently becomes NaN/0 downstream. These sanitize
+// on every keystroke so what's in state is always something Number() can
+// parse cleanly, rather than deferring the problem to submit time.
+function sanitizeNonNegativeIntegerInput(raw: string): string {
+  return raw.replace(/[^0-9]/g, "");
+}
+
+function sanitizeSignedDecimalInput(raw: string): string {
+  let s = raw.replace(/[^0-9.-]/g, "");
+  const negative = s.startsWith("-");
+  s = s.replace(/-/g, "");
+  const firstDot = s.indexOf(".");
+  if (firstDot !== -1) s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, "");
+  return (negative ? "-" : "") + s;
+}
+
+function sanitizeNonNegativeDecimalInput(raw: string): string {
+  let s = raw.replace(/[^0-9.]/g, "");
+  const firstDot = s.indexOf(".");
+  if (firstDot !== -1) s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, "");
+  return s;
 }
 
 function getDurationSeconds(form: FormState): number | null {
@@ -169,9 +152,9 @@ type FormState = typeof emptyForm;
 // user's display unit) from an existing rule's stored (always-Celsius)
 // condition.
 function conditionToFormFields(condition: RuleCondition): Partial<FormState> {
-  if (condition.type === "between") {
+  if (condition.type === "between" || condition.type === "outside") {
     return {
-      conditionType: "between",
+      conditionType: condition.type,
       low: String(condition.low),
       high: String(condition.high),
       threshold: "",
@@ -211,6 +194,9 @@ function consoleWebhookLabel(target: Extract<WebhookTarget, { kind: "console" }>
 // is still fully editable in the create/edit dialog and viewable in the
 // details dialog, this is just the at-a-glance version.
 function ruleDescription(rule: RuleRow, sensorLabel: string, temperatureUnit: "C" | "F"): string {
+  if (rule.metric === "leak") {
+    return `If ${sensorLabel} detects a leak for ${formatDuration(rule.durationSeconds)}`;
+  }
   const summary = conditionSummary(
     toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
     metricUnitSuffix(rule.metric, temperatureUnit)
@@ -218,132 +204,149 @@ function ruleDescription(rule: RuleRow, sensorLabel: string, temperatureUnit: "C
   return `If ${sensorLabel} is ${summary} for ${formatDuration(rule.durationSeconds)}`;
 }
 
-// Shared by the fired and resolved webhook sections of the rule form —
-// same kind/console/URL/token fields either way, just a different label
-// prefix and value/onChange pair.
-function WebhookFieldsEditor({
-  label,
-  value,
-  onChange,
-  consoles,
-  editing,
+function formatTick(n: number): string {
+  const rounded = Math.round(n * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2);
+}
+
+// Visual answer to "which side triggers, and when does it release" — the
+// two condition types (between/outside) are mirror images of each other
+// (armed inside vs. armed outside the same low/high bounds, deadband
+// pointing outward vs. inward), which reads fine as prose right up until
+// someone's mental model defaults to the other one (see the conversation
+// that led to this component: "between" was read as "the value is OK
+// when it's between this," which is actually what "outside" means).
+// Renders live off whatever the operator has currently typed, including
+// mid-entry incomplete values (nulls just collapse that segment away
+// rather than crashing on a NaN layout).
+function RangeNumberLine({
+  mode,
+  low,
+  high,
+  clearLow,
+  clearHigh,
+  marginPercent,
+  unitSuffix,
 }: {
-  label: string;
-  value: WebhookFormValue;
-  onChange: (next: WebhookFormValue) => void;
-  consoles: ProtectConsole[];
-  editing: boolean;
+  mode: "between" | "outside";
+  low: number | null;
+  high: number | null;
+  clearLow: number | null;
+  clearHigh: number | null;
+  marginPercent: number | null;
+  unitSuffix: string;
 }) {
-  const selectedConsole = consoles.find((c) => c.id === value.consoleId);
+  if (low == null || high == null || !(low < high)) return null;
+
+  const width = high - low;
+  const margin = marginPercent != null && marginPercent > 0 ? (width * marginPercent) / 100 : 0;
+  const effectiveClearLow = clearLow ?? (mode === "between" ? low - margin : low + margin);
+  const effectiveClearHigh = clearHigh ?? (mode === "between" ? high + margin : high - margin);
+
+  // Pad the visible range a bit past whichever bound is furthest out, so
+  // the outward-expanding "between" deadband has room to actually show.
+  const pad = Math.max(width * 0.3, (Math.abs(effectiveClearLow - low) + Math.abs(effectiveClearHigh - high)) * 0.6, 1);
+  const min = Math.min(low, effectiveClearLow) - pad;
+  const max = Math.max(high, effectiveClearHigh) + pad;
+  const span = max - min;
+  const pct = (v: number) => `${((v - min) / span) * 100}%`;
+
+  const armedColor = "bg-red-500/70 dark:bg-red-500/60";
+  const safeColor = "bg-emerald-500/60 dark:bg-emerald-500/50";
+  const deadbandColor = "bg-muted-foreground/25";
+
+  // Three fixed-shape segment lists — one per zone kind — rather than one
+  // combined "figure out the color per pixel" pass: between/outside only
+  // ever differ in which of these three shapes is armed vs. safe, so it's
+  // clearer to name the shapes once and swap which color each gets.
+  const outerLeft = { from: min, to: Math.min(low, effectiveClearLow) };
+  const deadbandLeft = { from: Math.min(low, effectiveClearLow), to: Math.max(low, effectiveClearLow) };
+  const middle = { from: Math.max(low, effectiveClearLow), to: Math.min(high, effectiveClearHigh) };
+  const deadbandRight = { from: Math.min(high, effectiveClearHigh), to: Math.max(high, effectiveClearHigh) };
+  const outerRight = { from: Math.max(high, effectiveClearHigh), to: max };
+
+  const segments =
+    mode === "between"
+      ? [
+          { ...outerLeft, color: safeColor },
+          { ...deadbandLeft, color: deadbandColor },
+          { ...middle, color: armedColor },
+          { ...deadbandRight, color: deadbandColor },
+          { ...outerRight, color: safeColor },
+        ]
+      : [
+          { ...outerLeft, color: armedColor },
+          { ...deadbandLeft, color: deadbandColor },
+          { ...middle, color: safeColor },
+          { ...deadbandRight, color: deadbandColor },
+          { ...outerRight, color: armedColor },
+        ];
+
+  const rawMarkers = [
+    { value: low, label: "low" },
+    { value: high, label: "high" },
+    ...(Math.abs(effectiveClearLow - low) > span * 0.001 ? [{ value: effectiveClearLow, label: "release" }] : []),
+    ...(Math.abs(effectiveClearHigh - high) > span * 0.001 ? [{ value: effectiveClearHigh, label: "release" }] : []),
+  ];
+
+  // Two markers whose percent positions land close together render their
+  // label text on top of each other — alternate close ones onto a second
+  // row instead of just hoping labels never collide (four markers can
+  // easily bunch up: low/release pairs get closer together the smaller
+  // the deadband gap is).
+  const MIN_GAP_PCT = 14;
+  let lastPct = -Infinity;
+  let nextRow: 0 | 1 = 0;
+  const markers = [...rawMarkers]
+    .sort((a, b) => a.value - b.value)
+    .map((m) => {
+      const p = ((m.value - min) / span) * 100;
+      const row = p - lastPct < MIN_GAP_PCT ? nextRow : 0;
+      nextRow = row === 0 ? 1 : 0;
+      lastPct = p;
+      return { ...m, row };
+    });
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-border p-3">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-muted-foreground">{label}</span>
-        <div className="flex gap-1">
-          <Button
-            type="button"
-            size="sm"
-            variant={value.kind === "console" ? "default" : "outline"}
-            onClick={() => onChange({ ...value, kind: "console" })}
-          >
-            Console
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={value.kind === "custom" ? "default" : "outline"}
-            onClick={() => onChange({ ...value, kind: "custom" })}
-          >
-            Custom
-          </Button>
-        </div>
+    <div className="flex flex-col gap-1 py-1">
+      <div className="relative h-3 w-full overflow-hidden rounded-full border border-border/80">
+        {segments.map((seg, i) =>
+          seg.to <= seg.from ? null : (
+            <div
+              key={i}
+              className={`absolute inset-y-0 ${seg.color}`}
+              style={{ left: pct(seg.from), width: `${((seg.to - seg.from) / span) * 100}%` }}
+            />
+          )
+        )}
       </div>
-
-      {value.kind === "console" ? (
-        <>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">Console</label>
-            <select
-              className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-              value={value.consoleId}
-              onChange={(e) => {
-                const console_ = consoles.find((c) => c.id === e.target.value);
-                onChange({
-                  ...value,
-                  consoleId: e.target.value,
-                  // Prefill from the console's default, but only if the
-                  // operator hasn't already typed something of their own
-                  // — lets fired/resolved use different webhook IDs on
-                  // the same console (SPEC.md section 7).
-                  webhookId: value.webhookId || console_?.defaultWebhookId || "",
-                });
-              }}
-              required
-            >
-              <option value="" disabled>
-                Select a console
-              </option>
-              {consoles.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+      <div className="relative h-14 w-full text-[10px] text-muted-foreground">
+        {markers.map((m, i) => (
+          <div
+            key={i}
+            className="absolute flex -translate-x-1/2 flex-col items-center"
+            style={{ left: pct(m.value), top: m.row === 1 ? "1.5rem" : 0 }}
+          >
+            <div className="h-1.5 w-px bg-border" />
+            <span className="whitespace-nowrap">
+              {formatTick(m.value)}
+              {unitSuffix}
+            </span>
+            <span className="italic">{m.label}</span>
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">Webhook ID</label>
-            <Input
-              value={value.webhookId}
-              onChange={(e) => onChange({ ...value, webhookId: e.target.value })}
-              placeholder="matches an Alarm Manager rule's webhook trigger"
-              required
-            />
-          </div>
-          {selectedConsole && value.webhookId && (
-            <p className="break-all font-mono text-xs text-muted-foreground">
-              {buildConsoleWebhookUrl(selectedConsole.host, value.webhookId, selectedConsole.apiBaseUrlOverride)}
-            </p>
-          )}
-        </>
-      ) : (
-        <>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">URL</label>
-            <Input
-              value={value.url}
-              onChange={(e) => onChange({ ...value, url: e.target.value })}
-              placeholder="https://..."
-              required
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">Bearer token (optional)</label>
-            <Input
-              type="password"
-              value={value.bearerToken}
-              onChange={(e) => onChange({ ...value, bearerToken: e.target.value })}
-              placeholder={editing ? "leave blank to keep the existing token" : "sent as Authorization: Bearer …"}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">Body template (optional, POST only)</label>
-            <Textarea
-              value={value.bodyTemplate}
-              onChange={(e) => onChange({ ...value, bodyTemplate: e.target.value })}
-              placeholder={'{"sensor": "{{sensorName}}", "value": {{value}}, "threshold": "{{threshold}}"}'}
-            />
-            <p className="text-xs text-muted-foreground">
-              Placeholders: <code className="font-mono">{"{{sensorName}}"}</code>{" "}
-              <code className="font-mono">{"{{metric}}"}</code> <code className="font-mono">{"{{value}}"}</code>{" "}
-              <code className="font-mono">{"{{threshold}}"}</code>{" "}
-              <code className="font-mono">{"{{durationMinutes}}"}</code>. <code className="font-mono">value</code>{" "}
-              and <code className="font-mono">threshold</code> are always in Celsius, independent of any account's
-              display unit. Left blank, no body is sent. Only used when method is POST.
-            </p>
-          </div>
-        </>
-      )}
+        ))}
+      </div>
+      <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <span className={`inline-block h-2 w-2 rounded-full ${armedColor}`} /> armed
+        </span>
+        <span className="flex items-center gap-1">
+          <span className={`inline-block h-2 w-2 rounded-full ${deadbandColor}`} /> deadband
+        </span>
+        <span className="flex items-center gap-1">
+          <span className={`inline-block h-2 w-2 rounded-full ${safeColor}`} /> safe
+        </span>
+      </div>
     </div>
   );
 }
@@ -413,8 +416,115 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canEdit]);
 
+  // Sensor statuses only otherwise refresh after a rule mutation (see
+  // load()) — the Details dialog's "last seen" was reading whatever
+  // statuses happened to be in state from the last such mutation, which
+  // could be stale by the time someone actually opens it to check. This
+  // is the lightweight fix: pull fresh statuses the moment the dialog
+  // opens, without the heavier full load() (which also re-fetches every
+  // rule's delivery history).
+  const refreshSensorStatuses = React.useCallback(async () => {
+    const res = await fetch("/api/sensors");
+    if (res.ok) {
+      const body = await res.json();
+      setSensors(body.sensors);
+      setSensorStatuses(body.statuses);
+    }
+  }, []);
+
+  function openDetailsDialog(ruleId: string) {
+    setDetailsRuleId(ruleId);
+    void refreshSensorStatuses();
+  }
+
   const selectedSensor = sensors.find((s) => s.id === form.sensorId);
   const unitSuffix = form.metric ? metricUnitSuffix(form.metric as Metric, temperatureUnit) : "";
+  // leak reports 0 (dry) or 1 (detected) — see packages/engine/src/protect.ts's
+  // leakValue — there's no continuous range to be above/below/between, so
+  // the form hides the numeric condition UI entirely and buildCondition
+  // below always emits a fixed "above 0.5" condition for it.
+  const isLeakMetric = form.metric === "leak";
+
+  // Live (pre-submit) mirror of the deadband rules validateCondition
+  // enforces server-side — same directions, just read straight off the
+  // in-progress form strings so the dialog can show a red error and block
+  // saving before the operator ever hits submit, not after. Values are
+  // compared in the display unit the operator is typing in (Fahrenheit or
+  // Celsius) rather than converted first — for temperature the C<->F
+  // conversion is monotonic, so "is X past Y" comes out the same either
+  // way.
+  const parseNum = (s: string): number | null => {
+    const n = Number(s);
+    return s.trim() !== "" && Number.isFinite(n) ? n : null;
+  };
+  const thresholdNum = parseNum(form.threshold);
+  const clearThresholdNum = parseNum(form.clearThreshold);
+  const lowNum = parseNum(form.low);
+  const highNum = parseNum(form.high);
+  const clearLowNum = parseNum(form.clearLow);
+  const clearHighNum = parseNum(form.clearHigh);
+
+  let hysteresisError: string | null = null;
+  if (!isLeakMetric) {
+    if (form.conditionType === "above" && thresholdNum != null && clearThresholdNum != null && clearThresholdNum > thresholdNum) {
+      hysteresisError = "The disarm point can't be above the arm threshold — it would disarm the rule while the reading is still past the point that armed it.";
+    } else if (
+      form.conditionType === "below" &&
+      thresholdNum != null &&
+      clearThresholdNum != null &&
+      clearThresholdNum < thresholdNum
+    ) {
+      hysteresisError = "The disarm point can't be below the arm threshold — it would disarm the rule while the reading is still past the point that armed it.";
+    } else if (form.conditionType === "between") {
+      if (lowNum != null && highNum != null && !(lowNum < highNum)) {
+        hysteresisError = "The low bound must be less than the high bound.";
+      } else if (form.hysteresisMode === "manual") {
+        if (lowNum != null && clearLowNum != null && clearLowNum > lowNum) {
+          hysteresisError = "The lower disarm point must be at or below the low bound, not inside the armed range.";
+        } else if (highNum != null && clearHighNum != null && clearHighNum < highNum) {
+          hysteresisError = "The upper disarm point must be at or above the high bound, not inside the armed range.";
+        }
+      } else if (form.hysteresisMode === "auto" && form.marginPercent !== "" && !(Number(form.marginPercent) > 0)) {
+        hysteresisError = "Auto hysteresis margin must be greater than 0%.";
+      }
+    } else if (form.conditionType === "outside") {
+      if (lowNum != null && highNum != null && !(lowNum < highNum)) {
+        hysteresisError = "The low bound must be less than the high bound.";
+      } else if (form.hysteresisMode === "manual") {
+        if (lowNum != null && clearLowNum != null && clearLowNum < lowNum) {
+          hysteresisError = "The lower disarm point must be at or above the low bound — it's the edge of the safe zone, not the armed zone.";
+        } else if (highNum != null && clearHighNum != null && clearHighNum > highNum) {
+          hysteresisError = "The upper disarm point must be at or below the high bound — it's the edge of the safe zone, not the armed zone.";
+        } else if (clearLowNum != null && clearHighNum != null && !(clearLowNum < clearHighNum)) {
+          hysteresisError = "The lower disarm point must be less than the upper disarm point.";
+        }
+      } else if (form.hysteresisMode === "auto") {
+        const margin = form.marginPercent === "" ? null : Number(form.marginPercent);
+        if (margin != null && !(margin > 0)) {
+          hysteresisError = "Auto hysteresis margin must be greater than 0%.";
+        } else if (margin != null && !(margin < 50)) {
+          hysteresisError = "Auto hysteresis margin must be less than 50% for an outside condition.";
+        }
+      }
+    }
+  }
+
+  // Sanitizing onChange (see sanitizeSignedDecimalInput et al.) blocks
+  // letters and stray symbols outright, but a value like "-" or "." is
+  // still a legal set of characters that isn't a complete number yet —
+  // flag that live too, rather than only discovering it at submit when
+  // toStored(Number("-")) silently becomes NaN.
+  const numberFieldError = "Enter a valid number.";
+  const isIncompleteNumber = (s: string) => s.trim() !== "" && !Number.isFinite(Number(s));
+  const hasIncompleteNumber =
+    !isLeakMetric &&
+    (isIncompleteNumber(form.threshold) ||
+      isIncompleteNumber(form.low) ||
+      isIncompleteNumber(form.high) ||
+      isIncompleteNumber(form.clearThreshold) ||
+      isIncompleteNumber(form.clearLow) ||
+      isIncompleteNumber(form.clearHigh) ||
+      isIncompleteNumber(form.marginPercent));
 
   function sensorName(id: string): string {
     return sensors.find((s) => s.id === id)?.name ?? id;
@@ -425,14 +535,8 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   // duration against it — same badge/thresholds as the Sensors page (see
   // lib/reportingBadge.ts), sourced from the same per-sensor checkin data.
   function sensorReportingStatus(sensorId: string): { badge: ReturnType<typeof reportingBadge>; status?: SensorStatus } {
-    const sensor = sensors.find((s) => s.id === sensorId);
     const status = sensorStatuses.find((s) => s.sensorId === sensorId);
-    const console_ = sensor ? consoles.find((c) => c.id === sensor.consoleId) : undefined;
-    const badge = reportingBadge(
-      status?.lastSeenAt ?? null,
-      status?.observedCheckinIntervalSeconds ?? null,
-      console_?.defaultIntervalSeconds ?? 300
-    );
+    const badge = reportingBadge(status?.lastSeenAt ?? null, status?.observedCheckinIntervalSeconds ?? null);
     return { badge, status };
   }
 
@@ -447,7 +551,11 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
     const metric = form.metric as Metric;
     const toStored = (v: number) => toStoredValue(metric, v, temperatureUnit);
 
-    if (form.conditionType === "between") {
+    if (isLeakMetric) {
+      return { type: "above", threshold: 0.5, hysteresis: { mode: "manual", clearThreshold: 0.5 } };
+    }
+
+    if (form.conditionType === "between" || form.conditionType === "outside") {
       const low = toStored(Number(form.low));
       const high = toStored(Number(form.high));
       if (!Number.isFinite(low) || !Number.isFinite(high)) throw new Error("low and high bounds must be numbers");
@@ -460,7 +568,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
               clearLow: form.clearLow ? toStored(Number(form.clearLow)) : low,
               clearHigh: form.clearHigh ? toStored(Number(form.clearHigh)) : high,
             };
-      return { type: "between", low, high, hysteresis };
+      return { type: form.conditionType, low, high, hysteresis };
     }
 
     const threshold = toStored(Number(form.threshold));
@@ -513,6 +621,8 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
     setError(null);
     try {
       if (!form.sensorId || !form.metric) throw new Error("sensor and metric are required");
+      if (hysteresisError) throw new Error(hysteresisError);
+      if (hasIncompleteNumber) throw new Error(numberFieldError);
       const durationSeconds = getDurationSeconds(form);
       if (durationSeconds == null) throw new Error("duration is required");
 
@@ -641,7 +751,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
             <div className="flex flex-col gap-1">
               <label className="text-xs text-muted-foreground">Sensor</label>
               <select
-                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
                 value={form.sensorId}
                 onChange={(e) => setForm({ ...form, sensorId: e.target.value, metric: "", durationPreset: "" })}
                 required
@@ -681,11 +791,22 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
             <div className="flex flex-col gap-1">
               <label className="text-xs text-muted-foreground">Metric</label>
               <select
-                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
                 value={form.metric}
-                onChange={(e) =>
-                  setForm({ ...form, metric: e.target.value as Sensor["metrics"][number], durationPreset: "" })
-                }
+                onChange={(e) => {
+                  const metric = e.target.value as Sensor["metrics"][number];
+                  setForm({
+                    ...form,
+                    metric,
+                    durationPreset: "",
+                    // leak only ever has one meaningful condition — "is
+                    // detected" — there's no numeric threshold to be
+                    // above/below/between, so reset away from whatever
+                    // was picked for a previous, non-boolean metric.
+                    conditionType: metric === "leak" ? "above" : form.conditionType,
+                    hysteresisMode: "manual",
+                  });
+                }}
                 disabled={!selectedSensor}
                 required
               >
@@ -700,64 +821,115 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
               </select>
             </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Condition</label>
-              <select
-                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-                value={form.conditionType}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    conditionType: e.target.value as ConditionType,
-                    hysteresisMode: "manual",
-                  })
-                }
-              >
-                <option value="above">is above</option>
-                <option value="below">is below</option>
-                <option value="between">is between</option>
-              </select>
-            </div>
-
-            {form.conditionType === "between" ? (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">Low bound{unitSuffix && ` (${unitSuffix})`}</label>
-                  <Input
-                    type="number"
-                    value={form.low}
-                    onChange={(e) => setForm({ ...form, low: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs text-muted-foreground">High bound{unitSuffix && ` (${unitSuffix})`}</label>
-                  <Input
-                    type="number"
-                    value={form.high}
-                    onChange={(e) => setForm({ ...form, high: e.target.value })}
-                    required
-                  />
-                </div>
-              </div>
+            {isLeakMetric ? (
+              <p className="text-xs text-muted-foreground">
+                Leak is a yes/no sensor — this rule arms as soon as a leak is detected and releases once the
+                sensor reports dry again.
+              </p>
             ) : (
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Threshold{unitSuffix && ` (${unitSuffix})`}</label>
-                <Input
-                  type="number"
-                  value={form.threshold}
-                  onChange={(e) => setForm({ ...form, threshold: e.target.value })}
-                  required
-                />
+                <label className="text-xs text-muted-foreground">Condition</label>
+                <select
+                  className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  value={form.conditionType}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      conditionType: e.target.value as ConditionType,
+                      hysteresisMode: "manual",
+                    })
+                  }
+                >
+                  <option value="above">is above</option>
+                  <option value="below">is below</option>
+                  <option value="between">is between (armed inside the range)</option>
+                  <option value="outside">is outside (armed outside the range)</option>
+                </select>
               </div>
             )}
 
-            {form.conditionType === "between" ? (
+            {isLeakMetric ? null : form.conditionType === "between" || form.conditionType === "outside" ? (
+              <div className="flex flex-col gap-1">
+                <p className="text-xs text-muted-foreground">
+                  {form.conditionType === "between"
+                    ? "Arms once the reading is between these two bounds:"
+                    : "Arms once the reading is below the low bound or above the high bound:"}
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground">Low bound{unitSuffix && ` (${unitSuffix})`}</label>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      value={form.low}
+                      onChange={(e) => setForm({ ...form, low: sanitizeSignedDecimalInput(e.target.value) })}
+                      required
+                    />
+                    {isIncompleteNumber(form.low) && <p className="text-xs text-red-600">{numberFieldError}</p>}
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground">High bound{unitSuffix && ` (${unitSuffix})`}</label>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      value={form.high}
+                      onChange={(e) => setForm({ ...form, high: sanitizeSignedDecimalInput(e.target.value) })}
+                      required
+                    />
+                    {isIncompleteNumber(form.high) && <p className="text-xs text-red-600">{numberFieldError}</p>}
+                  </div>
+                </div>
+                {hysteresisError && lowNum != null && highNum != null && !(lowNum < highNum) && (
+                  <p className="text-xs text-red-600">{hysteresisError}</p>
+                )}
+              </div>
+            ) : isLeakMetric ? null : (
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-muted-foreground">
+                  Arms once the reading goes {form.conditionType === "above" ? "above" : "below"} this value
+                  {unitSuffix && ` (${unitSuffix})`}
+                </label>
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  value={form.threshold}
+                  onChange={(e) => {
+                    const threshold = sanitizeSignedDecimalInput(e.target.value);
+                    setForm({ ...form, threshold });
+                  }}
+                  onBlur={() => {
+                    // Keep the disarm point on the correct side automatically
+                    // when the arm threshold moves past it, instead of just
+                    // flagging the mismatch after the fact.
+                    if (thresholdNum == null || clearThresholdNum == null) return;
+                    if (form.conditionType === "above" && clearThresholdNum > thresholdNum) {
+                      setForm((f) => ({ ...f, clearThreshold: String(thresholdNum) }));
+                    } else if (form.conditionType === "below" && clearThresholdNum < thresholdNum) {
+                      setForm((f) => ({ ...f, clearThreshold: String(thresholdNum) }));
+                    }
+                  }}
+                  required
+                />
+                {isIncompleteNumber(form.threshold) && <p className="text-xs text-red-600">{numberFieldError}</p>}
+              </div>
+            )}
+
+            {isLeakMetric ? null : form.conditionType === "between" || form.conditionType === "outside" ? (
               <div className="flex flex-col gap-2 rounded-md border border-border p-3">
                 <p className="text-xs text-muted-foreground">
-                  The alarm releases once the reading moves back outside this range by enough to count as
-                  recovered — set that recovery point manually, or let it expand automatically by a percentage.
+                  {form.conditionType === "between"
+                    ? "Optional gap past each bound the reading must cross before disarming — blank means no gap."
+                    : "Optional gap inside each bound the reading must cross back before disarming — blank means no gap."}
                 </p>
+                <RangeNumberLine
+                  mode={form.conditionType}
+                  low={lowNum}
+                  high={highNum}
+                  clearLow={form.hysteresisMode === "manual" ? clearLowNum ?? lowNum : null}
+                  clearHigh={form.hysteresisMode === "manual" ? clearHighNum ?? highNum : null}
+                  marginPercent={form.hysteresisMode === "auto" ? Number(form.marginPercent) || 0 : null}
+                  unitSuffix={unitSuffix}
+                />
                 <div className="flex gap-1">
                   <Button
                     type="button"
@@ -780,59 +952,93 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-muted-foreground">
-                        Releases below{unitSuffix && ` (${unitSuffix})`}
+                        Low release point{unitSuffix && ` (${unitSuffix})`}
                       </label>
                       <Input
-                        type="number"
+                        type="text"
+                        inputMode="decimal"
                         value={form.clearLow}
-                        onChange={(e) => setForm({ ...form, clearLow: e.target.value })}
-                        placeholder="defaults to low bound"
+                        onChange={(e) => setForm({ ...form, clearLow: sanitizeSignedDecimalInput(e.target.value) })}
+                        onBlur={() => {
+                          if (lowNum == null || clearLowNum == null) return;
+                          if (form.conditionType === "between" && clearLowNum > lowNum) {
+                            setForm((f) => ({ ...f, clearLow: String(lowNum) }));
+                          } else if (form.conditionType === "outside" && clearLowNum < lowNum) {
+                            setForm((f) => ({ ...f, clearLow: String(lowNum) }));
+                          }
+                        }}
+                        placeholder="blank = low bound"
                       />
+                      {isIncompleteNumber(form.clearLow) && <p className="text-xs text-red-600">{numberFieldError}</p>}
                     </div>
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-muted-foreground">
-                        Releases above{unitSuffix && ` (${unitSuffix})`}
+                        High release point{unitSuffix && ` (${unitSuffix})`}
                       </label>
                       <Input
-                        type="number"
+                        type="text"
+                        inputMode="decimal"
                         value={form.clearHigh}
-                        onChange={(e) => setForm({ ...form, clearHigh: e.target.value })}
-                        placeholder="defaults to high bound"
+                        onChange={(e) => setForm({ ...form, clearHigh: sanitizeSignedDecimalInput(e.target.value) })}
+                        onBlur={() => {
+                          if (highNum == null || clearHighNum == null) return;
+                          if (form.conditionType === "between" && clearHighNum < highNum) {
+                            setForm((f) => ({ ...f, clearHigh: String(highNum) }));
+                          } else if (form.conditionType === "outside" && clearHighNum > highNum) {
+                            setForm((f) => ({ ...f, clearHigh: String(highNum) }));
+                          }
+                        }}
+                        placeholder="blank = high bound"
                       />
+                      {isIncompleteNumber(form.clearHigh) && <p className="text-xs text-red-600">{numberFieldError}</p>}
                     </div>
                   </div>
                 ) : (
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">Release margin (%)</label>
+                    <label className="text-xs text-muted-foreground">Recovery margin (%)</label>
                     <Input
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={form.marginPercent}
-                      onChange={(e) => setForm({ ...form, marginPercent: e.target.value })}
+                      onChange={(e) => setForm({ ...form, marginPercent: sanitizeNonNegativeDecimalInput(e.target.value) })}
                       placeholder="e.g. 5"
                       required
                     />
+                    {isIncompleteNumber(form.marginPercent) && <p className="text-xs text-red-600">{numberFieldError}</p>}
                     <p className="text-xs text-muted-foreground">
-                      Expands the range outward by this percent of its width on both sides before it counts as
-                      released.
+                      {form.conditionType === "between"
+                        ? "Expands both bounds outward by this % before disarming."
+                        : "Shrinks both bounds inward by this % before disarming (must be under 50%)."}
                     </p>
                   </div>
                 )}
+                {hysteresisError && <p className="text-xs text-red-600">{hysteresisError}</p>}
               </div>
             ) : (
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-muted-foreground">
-                  Alarm releases at{unitSuffix && ` (${unitSuffix})`} (optional)
+                  Release point{unitSuffix && ` (${unitSuffix})`} (optional)
                 </label>
                 <Input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={form.clearThreshold}
-                  onChange={(e) => setForm({ ...form, clearThreshold: e.target.value })}
-                  placeholder="defaults to the threshold above"
+                  onChange={(e) => setForm({ ...form, clearThreshold: sanitizeSignedDecimalInput(e.target.value) })}
+                  onBlur={() => {
+                    if (thresholdNum == null || clearThresholdNum == null) return;
+                    if (form.conditionType === "above" && clearThresholdNum > thresholdNum) {
+                      setForm((f) => ({ ...f, clearThreshold: String(thresholdNum) }));
+                    } else if (form.conditionType === "below" && clearThresholdNum < thresholdNum) {
+                      setForm((f) => ({ ...f, clearThreshold: String(thresholdNum) }));
+                    }
+                  }}
+                  placeholder="blank = arm value"
                 />
+                {isIncompleteNumber(form.clearThreshold) && <p className="text-xs text-red-600">{numberFieldError}</p>}
                 <p className="text-xs text-muted-foreground">
-                  This is the point at which the alarm releases once fired. If left blank, it releases as soon as
-                  the reading crosses back over the threshold itself.
+                  Gap the reading must cross back past before disarming — blank means no gap.
                 </p>
+                {hysteresisError && <p className="text-xs text-red-600">{hysteresisError}</p>}
               </div>
             )}
 
@@ -863,7 +1069,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
 
               {form.durationMode === "preset" ? (
                 <select
-                  className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                  className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
                   value={form.durationPreset}
                   onChange={(e) => setForm({ ...form, durationPreset: Number(e.target.value) })}
                   required
@@ -882,28 +1088,28 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-muted-foreground">Days</label>
                     <Input
-                      type="number"
-                      min={0}
+                      type="text"
+                      inputMode="numeric"
                       value={form.customDays}
-                      onChange={(e) => setForm({ ...form, customDays: e.target.value })}
+                      onChange={(e) => setForm({ ...form, customDays: sanitizeNonNegativeIntegerInput(e.target.value) })}
                     />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-muted-foreground">Hours</label>
                     <Input
-                      type="number"
-                      min={0}
+                      type="text"
+                      inputMode="numeric"
                       value={form.customHours}
-                      onChange={(e) => setForm({ ...form, customHours: e.target.value })}
+                      onChange={(e) => setForm({ ...form, customHours: sanitizeNonNegativeIntegerInput(e.target.value) })}
                     />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-muted-foreground">Minutes</label>
                     <Input
-                      type="number"
-                      min={0}
+                      type="text"
+                      inputMode="numeric"
                       value={form.customMinutes}
-                      onChange={(e) => setForm({ ...form, customMinutes: e.target.value })}
+                      onChange={(e) => setForm({ ...form, customMinutes: sanitizeNonNegativeIntegerInput(e.target.value) })}
                     />
                   </div>
                 </div>
@@ -926,6 +1132,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
               onChange={(webhook) => setForm({ ...form, webhook })}
               consoles={consoles}
               editing={editingId != null}
+              bodyTemplateNote="value and threshold are always in Celsius, independent of any account's display unit."
             />
 
             <div className="flex items-center gap-2">
@@ -946,12 +1153,13 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                 onChange={(resolvedWebhook) => setForm({ ...form, resolvedWebhook })}
                 consoles={consoles}
                 editing={editingId != null}
+                bodyTemplateNote="value and threshold are always in Celsius, independent of any account's display unit."
               />
             )}
 
             {error && <p className="text-sm text-red-600">{error}</p>}
 
-            <Button type="submit" disabled={saving}>
+            <Button type="submit" disabled={saving || !!hysteresisError || hasIncompleteNumber}>
               {saving ? "Saving…" : editingId ? "Save changes" : "Create rule"}
             </Button>
           </form>
@@ -1185,7 +1393,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                     </TableCell>
                   )}
                   <TableCell>
-                    <Button variant="outline" size="sm" onClick={() => setDetailsRuleId(rule.id)}>
+                    <Button variant="outline" size="sm" onClick={() => openDetailsDialog(rule.id)}>
                       Details
                     </Button>
                   </TableCell>

@@ -21,7 +21,7 @@ export default async function RulesPage() {
   const rules = engine.config.listLatches().map((l) => redactLatch(l, actor.role)) as RuleRow[];
   const sensors = engine.config.listSensors();
   const sensorStatuses = engine.listSensorStatuses();
-  const consoles = engine.config.listProtectConsoles().map(redactConsole);
+  const consoles = engine.config.listProtectConsoles().map((c) => redactConsole(c, actor.role));
 
   const canEdit = hasRole(actor, "admin");
   const deliveries: Record<string, WebhookDelivery[]> = {};

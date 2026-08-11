@@ -60,7 +60,7 @@ export function toStoredValue(metric: Metric, displayValue: number, temperatureU
 // of the range's own width — see condition.ts), so it's left untouched.
 export function toDisplayCondition(condition: RuleCondition, metric: Metric, temperatureUnit: "C" | "F"): RuleCondition {
   const conv = (v: number) => toDisplayValue(metric, v, temperatureUnit);
-  if (condition.type === "between") {
+  if (condition.type === "between" || condition.type === "outside") {
     const hysteresis: RangeHysteresis =
       condition.hysteresis.mode === "auto"
         ? condition.hysteresis
@@ -69,7 +69,7 @@ export function toDisplayCondition(condition: RuleCondition, metric: Metric, tem
             clearLow: conv(condition.hysteresis.clearLow),
             clearHigh: conv(condition.hysteresis.clearHigh),
           };
-    return { type: "between", low: conv(condition.low), high: conv(condition.high), hysteresis };
+    return { type: condition.type, low: conv(condition.low), high: conv(condition.high), hysteresis };
   }
   return {
     type: condition.type,

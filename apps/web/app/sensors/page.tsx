@@ -18,7 +18,7 @@ export default async function SensorsPage() {
   const initial = {
     sensors: engine.config.listSensors(),
     statuses: engine.listSensorStatuses(),
-    consoles: engine.config.listProtectConsoles().map(redactConsole),
+    consoles: engine.config.listProtectConsoles().map((c) => redactConsole(c, actor.role)),
     consoleStatuses: engine.listConsoleStatuses(),
   };
 

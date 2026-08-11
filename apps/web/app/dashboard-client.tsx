@@ -108,10 +108,12 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
                     live value every second after mount. */}
                 <CardDescription title={sinceTimestamp ? absoluteTimeLabel(sinceTimestamp) : undefined} suppressHydrationWarning>
                   {rule.metric}{" "}
-                  {conditionSummary(
-                    toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
-                    metricUnitSuffix(rule.metric, temperatureUnit)
-                  )}
+                  {rule.metric === "leak"
+                    ? "detected"
+                    : conditionSummary(
+                        toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
+                        metricUnitSuffix(rule.metric, temperatureUnit)
+                      )}
                   {sinceTimestamp ? ` · ${preciseAgoLabel(sinceTimestamp)}` : ""}
                 </CardDescription>
               </CardHeader>

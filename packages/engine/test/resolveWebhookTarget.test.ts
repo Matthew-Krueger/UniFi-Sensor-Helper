@@ -33,8 +33,11 @@ describe("resolveWebhookTarget", () => {
       host: "192.168.1.1",
       apiKey: "console-api-key",
       apiBaseUrlOverride: null,
-      defaultIntervalSeconds: 300,
       defaultWebhookId: "default-hook",
+      downAlertEnabled: false,
+      downAlertDurationSeconds: null,
+      downAlertWebhook: null,
+      downAlertResolvedWebhook: null,
       createdAt: 0,
     });
 
@@ -55,8 +58,11 @@ describe("resolveWebhookTarget", () => {
       host: "192.168.1.1",
       apiKey: "console-api-key",
       apiBaseUrlOverride: "https://unifi.ui.com/proxy/consoles/abc123/protect/integration",
-      defaultIntervalSeconds: 300,
       defaultWebhookId: null,
+      downAlertEnabled: false,
+      downAlertDurationSeconds: null,
+      downAlertWebhook: null,
+      downAlertResolvedWebhook: null,
       createdAt: 0,
     });
 

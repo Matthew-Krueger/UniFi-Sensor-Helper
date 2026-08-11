@@ -93,15 +93,16 @@ export const protectConsoles = sqliteTable("protect_consoles", {
   // host. Null (the default) means "derive it from host" like today; most
   // deployments never need to touch this.
   apiBaseUrlOverride: text("api_base_url_override"),
-  // Expected reporting interval (seconds) for sensors on this console —
-  // also the cadence of the periodic re-poll (see singleton.ts's
-  // connectConsole; sensors are always fetched in one bulk GET
-  // /v1/sensors call per console, so this is console-level, not
-  // per-sensor). Used as the fallback for rule-duration validation until
-  // a sensor's real interval has been observed from actual reading gaps.
-  defaultIntervalSeconds: integer("default_interval_seconds").notNull().default(300),
   // Default Alarm Manager webhook ID (SPEC.md section 7) — see
   // shared/src/types.ts's ProtectConsole.defaultWebhookId doc comment.
   defaultWebhookId: text("default_webhook_id"),
+  // "Console down" alert config — see shared/src/types.ts's
+  // ProtectConsole.downAlertEnabled doc comment. Stored the same way a
+  // Latch's webhook/resolvedWebhook are (JSON-encoded WebhookTarget),
+  // null until the operator configures one.
+  downAlertEnabled: integer("down_alert_enabled", { mode: "boolean" }).notNull().default(false),
+  downAlertDurationSeconds: integer("down_alert_duration_seconds"),
+  downAlertWebhookJson: text("down_alert_webhook_json"),
+  downAlertResolvedWebhookJson: text("down_alert_resolved_webhook_json"),
   createdAt: integer("created_at").notNull(),
 });

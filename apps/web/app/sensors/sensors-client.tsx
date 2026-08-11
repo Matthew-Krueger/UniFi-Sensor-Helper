@@ -278,7 +278,7 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
               .map((s) => statuses.find((x) => x.sensorId === s.id)?.observedCheckinIntervalSeconds)
               .filter((v): v is number => v != null);
             const observedSeconds = observedValues.length > 0 ? Math.min(...observedValues) : null;
-            const badge = reportingBadge(status?.lastEventAt ?? null, observedSeconds, console_.defaultIntervalSeconds);
+            const badge = reportingBadge(status?.lastEventAt ?? null, observedSeconds);
 
             return (
               <Card key={console_.id}>
@@ -302,8 +302,7 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
                       const sensorStatus = statuses.find((s) => s.sensorId === sensor.id);
                       const sensorBadge = reportingBadge(
                         sensorStatus?.lastSeenAt ?? null,
-                        sensorStatus?.observedCheckinIntervalSeconds ?? null,
-                        console_.defaultIntervalSeconds
+                        sensorStatus?.observedCheckinIntervalSeconds ?? null
                       );
                       return (
                         <div

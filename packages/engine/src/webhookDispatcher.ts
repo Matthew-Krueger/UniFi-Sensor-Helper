@@ -79,6 +79,35 @@ export async function dispatchWebhook(
   retryDelayMs = RETRY_DELAY_MS
 ): Promise<DispatchResult> {
   const body = target.bodyTemplate ? renderTemplate(target.bodyTemplate, ctx) : undefined;
+  return sendWithRetries(target, body, fetchImpl, retryDelayMs);
+}
+
+// Non-latch dispatch path — used by the console-down alert (see
+// LatchEngine's downAlert handling), which has no Latch to build a
+// DispatchContext from. Same retry/logging/masking behavior as
+// dispatchWebhook, just a plain {{key}}: value substitution map instead
+// of the latch-shaped one renderTemplate expects.
+export async function dispatchWebhookWithVars(
+  target: ResolvedWebhookTarget,
+  vars: Record<string, string>,
+  fetchImpl: typeof fetch = fetch,
+  retryDelayMs = RETRY_DELAY_MS
+): Promise<DispatchResult> {
+  let body = target.bodyTemplate;
+  if (body) {
+    for (const [key, value] of Object.entries(vars)) {
+      body = body.replaceAll(`{{${key}}}`, value);
+    }
+  }
+  return sendWithRetries(target, body, fetchImpl, retryDelayMs);
+}
+
+async function sendWithRetries(
+  target: ResolvedWebhookTarget,
+  body: string | undefined,
+  fetchImpl: typeof fetch,
+  retryDelayMs: number
+): Promise<DispatchResult> {
   const maskedUrl = maskSecret(target.url);
 
   let lastError: string | undefined;

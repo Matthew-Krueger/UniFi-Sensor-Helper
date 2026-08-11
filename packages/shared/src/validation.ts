@@ -51,16 +51,6 @@ export const consoleApiBaseUrlOverrideSchema = z
 // user-authored text, bounded so it can't bloat the latches table.
 export const webhookBodyTemplateSchema = z.string().max(4000, "Body template must be 4000 characters or fewer");
 
-// Expected-interval fields (console default, per-sensor override) — 10s
-// floor rules out an accidentally-entered value that'd make every rule
-// duration look invalid, 24h ceiling is generous enough for any real
-// battery sensor while still bounding the input.
-export const intervalSecondsSchema = z
-  .number()
-  .int()
-  .min(10, "Interval must be at least 10 seconds")
-  .max(86400, "Interval must be 24 hours or less");
-
 export interface ValidationResult {
   valid: boolean;
   error?: string;

@@ -14,7 +14,7 @@ export default async function ConsolesPage() {
 
   const engine = getEngine();
   const initial = {
-    consoles: engine.config.listProtectConsoles().map(redactConsole),
+    consoles: engine.config.listProtectConsoles().map((c) => redactConsole(c, actor.role)),
     statuses: engine.listConsoleStatuses(),
   };
 

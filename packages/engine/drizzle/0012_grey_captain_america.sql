@@ -1,0 +1,1 @@
+ALTER TABLE `protect_consoles` DROP COLUMN `default_interval_seconds`;

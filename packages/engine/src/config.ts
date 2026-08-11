@@ -26,8 +26,13 @@ function consoleFromRow(row: typeof schema.protectConsoles.$inferSelect): Protec
     host: row.host,
     apiKey: row.apiKey,
     apiBaseUrlOverride: row.apiBaseUrlOverride,
-    defaultIntervalSeconds: row.defaultIntervalSeconds,
     defaultWebhookId: row.defaultWebhookId,
+    downAlertEnabled: row.downAlertEnabled,
+    downAlertDurationSeconds: row.downAlertDurationSeconds,
+    downAlertWebhook: row.downAlertWebhookJson ? normalizeWebhookTarget(JSON.parse(row.downAlertWebhookJson)) : null,
+    downAlertResolvedWebhook: row.downAlertResolvedWebhookJson
+      ? normalizeWebhookTarget(JSON.parse(row.downAlertResolvedWebhookJson))
+      : null,
     createdAt: row.createdAt,
   };
 }
@@ -128,8 +133,13 @@ export class ConfigStore {
         host: console.host,
         apiKey: console.apiKey,
         apiBaseUrlOverride: console.apiBaseUrlOverride,
-        defaultIntervalSeconds: console.defaultIntervalSeconds,
         defaultWebhookId: console.defaultWebhookId,
+        downAlertEnabled: console.downAlertEnabled,
+        downAlertDurationSeconds: console.downAlertDurationSeconds,
+        downAlertWebhookJson: console.downAlertWebhook ? JSON.stringify(console.downAlertWebhook) : null,
+        downAlertResolvedWebhookJson: console.downAlertResolvedWebhook
+          ? JSON.stringify(console.downAlertResolvedWebhook)
+          : null,
         createdAt: console.createdAt,
       })
       .onConflictDoUpdate({
@@ -139,15 +149,16 @@ export class ConfigStore {
           host: console.host,
           apiKey: console.apiKey,
           apiBaseUrlOverride: console.apiBaseUrlOverride,
-          defaultIntervalSeconds: console.defaultIntervalSeconds,
           defaultWebhookId: console.defaultWebhookId,
+          downAlertEnabled: console.downAlertEnabled,
+          downAlertDurationSeconds: console.downAlertDurationSeconds,
+          downAlertWebhookJson: console.downAlertWebhook ? JSON.stringify(console.downAlertWebhook) : null,
+          downAlertResolvedWebhookJson: console.downAlertResolvedWebhook
+            ? JSON.stringify(console.downAlertResolvedWebhook)
+            : null,
         },
       })
       .run();
-  }
-
-  setConsoleDefaultInterval(consoleId: string, seconds: number): void {
-    this.db.update(protectConsoles).set({ defaultIntervalSeconds: seconds }).where(eq(protectConsoles.id, consoleId)).run();
   }
 
   deleteProtectConsole(id: string): void {

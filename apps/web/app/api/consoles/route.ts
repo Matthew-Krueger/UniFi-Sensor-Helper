@@ -6,19 +6,19 @@ import {
   consoleHostSchema,
   consoleNameSchema,
   consoleWebhookIdSchema,
-  intervalSecondsSchema,
+  isDurationValid,
+  MIN_DURATION_SECONDS,
+  validateWebhookTarget,
 } from "@unifi-sensor-latch/shared";
-import type { ProtectConsole } from "@unifi-sensor-latch/shared";
+import type { ProtectConsole, WebhookTarget } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
 import { redactConsole } from "@/lib/consoleRedaction";
-
-const DEFAULT_INTERVAL_SECONDS = 300; // 5 minutes — matches schema.ts's column default
 
 export async function GET() {
   const actor = await requireRole("user");
   if (actor instanceof NextResponse) return actor;
   const engine = getEngine();
-  const consoles = engine.config.listProtectConsoles().map(redactConsole);
+  const consoles = engine.config.listProtectConsoles().map((c) => redactConsole(c, actor.role));
   const statuses = engine.listConsoleStatuses();
   return NextResponse.json({ consoles, statuses });
 }
@@ -35,13 +35,6 @@ export async function POST(req: NextRequest) {
   const apiKey = consoleApiKeySchema.safeParse(body.apiKey);
   if (!apiKey.success) return NextResponse.json({ error: apiKey.error.issues[0]?.message }, { status: 400 });
 
-  let defaultIntervalSeconds = DEFAULT_INTERVAL_SECONDS;
-  if (body.defaultIntervalSeconds != null) {
-    const interval = intervalSecondsSchema.safeParse(body.defaultIntervalSeconds);
-    if (!interval.success) return NextResponse.json({ error: interval.error.issues[0]?.message }, { status: 400 });
-    defaultIntervalSeconds = interval.data;
-  }
-
   let defaultWebhookId: string | null = null;
   if (body.defaultWebhookId) {
     const webhookId = consoleWebhookIdSchema.safeParse(body.defaultWebhookId);
@@ -56,6 +49,30 @@ export async function POST(req: NextRequest) {
     apiBaseUrlOverride = override.data;
   }
 
+  const downAlertEnabled = body.downAlertEnabled === true;
+  let downAlertDurationSeconds: number | null = null;
+  let downAlertWebhook: WebhookTarget | null = null;
+  let downAlertResolvedWebhook: WebhookTarget | null = null;
+  if (downAlertEnabled) {
+    if (!Number.isFinite(body.downAlertDurationSeconds) || !isDurationValid(body.downAlertDurationSeconds)) {
+      return NextResponse.json(
+        { error: `down alert duration must be at least ${MIN_DURATION_SECONDS} seconds` },
+        { status: 400 }
+      );
+    }
+    downAlertDurationSeconds = body.downAlertDurationSeconds;
+
+    const webhookCheck = validateWebhookTarget(body.downAlertWebhook);
+    if (!webhookCheck.valid) return NextResponse.json({ error: webhookCheck.error }, { status: 400 });
+    downAlertWebhook = body.downAlertWebhook;
+
+    if (body.downAlertResolvedWebhook) {
+      const resolvedCheck = validateWebhookTarget(body.downAlertResolvedWebhook);
+      if (!resolvedCheck.valid) return NextResponse.json({ error: resolvedCheck.error }, { status: 400 });
+      downAlertResolvedWebhook = body.downAlertResolvedWebhook;
+    }
+  }
+
   const engine = getEngine();
   const id: string = typeof body.id === "string" && body.id ? body.id : crypto.randomUUID();
   const console_: ProtectConsole = {
@@ -64,8 +81,11 @@ export async function POST(req: NextRequest) {
     host: host.data,
     apiKey: apiKey.data,
     apiBaseUrlOverride,
-    defaultIntervalSeconds,
     defaultWebhookId,
+    downAlertEnabled,
+    downAlertDurationSeconds,
+    downAlertWebhook,
+    downAlertResolvedWebhook,
     createdAt: Date.now(),
   };
 
@@ -80,5 +100,5 @@ export async function POST(req: NextRequest) {
     console.error("[api/consoles] connectConsole failed:", err);
   });
 
-  return NextResponse.json({ console: redactConsole(console_) }, { status: 201 });
+  return NextResponse.json({ console: redactConsole(console_, actor.role) }, { status: 201 });
 }

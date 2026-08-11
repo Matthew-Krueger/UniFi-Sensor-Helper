@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import type { ProtectConsole } from "@unifi-sensor-latch/shared";
+import type { ProtectConsole, WebhookTarget } from "@unifi-sensor-latch/shared";
 import {
   consoleApiBaseUrlOverrideSchema,
   consoleApiKeySchema,
   consoleHostSchema,
   consoleNameSchema,
   consoleWebhookIdSchema,
-  intervalSecondsSchema,
+  isDurationValid,
+  MIN_DURATION_SECONDS,
+  validateWebhookTarget,
 } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
 
@@ -50,13 +52,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     connectivityAffected = true;
   }
 
-  if (body.defaultIntervalSeconds !== undefined) {
-    const interval = intervalSecondsSchema.safeParse(body.defaultIntervalSeconds);
-    if (!interval.success) return NextResponse.json({ error: interval.error.issues[0]?.message }, { status: 400 });
-    updated.defaultIntervalSeconds = interval.data;
-    connectivityAffected = true; // re-poll cadence is set at connect time — see comment below
-  }
-
   if (body.defaultWebhookId !== undefined) {
     if (body.defaultWebhookId === null || body.defaultWebhookId === "") {
       updated.defaultWebhookId = null;
@@ -78,15 +73,58 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     connectivityAffected = true;
   }
 
+  if (body.downAlertEnabled !== undefined) {
+    updated.downAlertEnabled = body.downAlertEnabled === true;
+  }
+
+  if (updated.downAlertEnabled) {
+    if (body.downAlertDurationSeconds !== undefined) {
+      if (!Number.isFinite(body.downAlertDurationSeconds) || !isDurationValid(body.downAlertDurationSeconds)) {
+        return NextResponse.json(
+          { error: `down alert duration must be at least ${MIN_DURATION_SECONDS} seconds` },
+          { status: 400 }
+        );
+      }
+      updated.downAlertDurationSeconds = body.downAlertDurationSeconds;
+    }
+
+    if (body.downAlertWebhook !== undefined) {
+      const webhookCheck = validateWebhookTarget(body.downAlertWebhook);
+      if (!webhookCheck.valid) return NextResponse.json({ error: webhookCheck.error }, { status: 400 });
+      updated.downAlertWebhook = body.downAlertWebhook as WebhookTarget;
+    }
+
+    if (!updated.downAlertDurationSeconds || !updated.downAlertWebhook) {
+      return NextResponse.json(
+        { error: "a down alert needs both a duration and a webhook before it can be enabled" },
+        { status: 400 }
+      );
+    }
+
+    if (body.downAlertResolvedWebhook !== undefined) {
+      if (body.downAlertResolvedWebhook === null) {
+        updated.downAlertResolvedWebhook = null;
+      } else {
+        const resolvedCheck = validateWebhookTarget(body.downAlertResolvedWebhook);
+        if (!resolvedCheck.valid) return NextResponse.json({ error: resolvedCheck.error }, { status: 400 });
+        updated.downAlertResolvedWebhook = body.downAlertResolvedWebhook as WebhookTarget;
+      }
+    }
+  } else {
+    // Disabled: keep whatever duration/webhook values were last set so
+    // toggling back on doesn't lose the operator's configuration, but
+    // stop the engine's timer from treating this console as monitored —
+    // see LatchEngine's downAlert check, gated on downAlertEnabled.
+  }
+
   engine.config.upsertProtectConsole(updated);
 
-  // The websocket subscription and periodic re-poll timer (see
-  // singleton.ts's connectConsole) are only ever set up once, using
-  // whatever host/apiKey/defaultIntervalSeconds was current at connect
-  // time — they don't watch the database for changes. Without
-  // reconnecting here, editing any of those in the UI would silently do
-  // nothing to the already-running connection until the next full
-  // reconnect (a server restart, or manually removing/re-adding the
+  // The websocket subscription and safety-poll timer (see singleton.ts's
+  // connectConsole) are only ever set up once, using whatever host/apiKey
+  // was current at connect time — they don't watch the database for
+  // changes. Without reconnecting here, editing either in the UI would
+  // silently do nothing to the already-running connection until the next
+  // full reconnect (a server restart, or manually removing/re-adding the
   // console) — exactly the kind of "changed a setting, nothing happened"
   // bug this project can't afford. Not awaited — the trace in GET
   // /api/consoles's response shows the reconnect happening. Skipped for
