@@ -38,6 +38,7 @@ describe("ConfigStore latch state persistence", () => {
     store.upsertSensor({ id: "sensor-1", consoleId: "console-1", name: "Walk-in Freezer", metrics: ["temperature"] });
     store.upsertLatch({
       id: "freezer-temp",
+      name: null,
       sensorId: "sensor-1",
       metric: "temperature",
       condition: { type: "above", threshold: 55, hysteresis: { mode: "manual", clearThreshold: 38 } },

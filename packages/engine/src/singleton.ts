@@ -1,19 +1,17 @@
 import type {
   ConsoleStatus,
-  EffectiveInterval,
   Latch,
-  Metric,
   ProtectConsole,
   Reading,
   SensorStatus,
   WebhookDelivery,
 } from "@unifi-sensor-latch/shared";
-import { effectiveInterval } from "@unifi-sensor-latch/shared";
 import { AuthStore } from "./auth";
 import { ConfigStore } from "./config";
 import {
   checkConnection,
   fetchRawSensors,
+  rawSensorBattery,
   rawSensorToReadings,
   rawSensorToSensor,
   subscribeDevices,
@@ -33,17 +31,44 @@ export class LatchEngine {
   readonly auth = new AuthStore();
 
   private subscriptions = new Map<string, DeviceSubscription>();
-  // Supplementary re-discovery timer per console — see connectConsole's
-  // comment for why this exists alongside the websocket subscription.
-  private pollTimers = new Map<string, ReturnType<typeof setInterval>>();
+  // Safety-net re-discovery timer per console — see connectConsole's
+  // comment for why this exists alongside the websocket subscription and
+  // scheduleActivePull below. Deliberately slow: the active pull is the
+  // primary freshness mechanism now, this only covers the websocket going
+  // quiet without an explicit disconnect event.
+  private safetyPollTimers = new Map<string, ReturnType<typeof setInterval>>();
+  // Debounced GET /v1/sensors pull per console, (re)scheduled on every
+  // sensor touch — see scheduleActivePull.
+  private activePullTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private static readonly ACTIVE_PULL_DEBOUNCE_MS = 3000;
+  // Safety poll cadence is a generous multiple of the console's own
+  // default interval, with a floor — CLAUDE.md: don't poll faster than the
+  // sensor's own reporting interval "just in case". This is deliberately
+  // much slower than that floor since it's a fallback, not the primary
+  // sync path.
+  private static readonly SAFETY_POLL_MULTIPLIER = 4;
+  private static readonly SAFETY_POLL_FLOOR_SECONDS = 900; // 15 minutes
   // In-memory only, per ConsoleStatus/SensorStatus's doc comment (shared
   // types) — this is "is it alive right now", not a persisted history.
   private consoleStatuses = new Map<string, ConsoleStatus>();
   private sensorStatuses = new Map<string, SensorStatus>();
-  // Raw per-(sensorId, metric) reading timestamps, used only to compute
-  // the rolling-average observedIntervalSeconds exposed on SensorStatus —
-  // not exposed itself. Keyed by "${sensorId}:${metric}".
-  private lastReadingAt = new Map<string, number>();
+  // Raw per-sensor checkin timestamps (see recordSensorCheckin), used only
+  // to compute the rolling-average observedCheckinIntervalSeconds exposed
+  // on SensorStatus — not exposed itself.
+  private lastCheckinAt = new Map<string, number>();
+  // Gap-sample count per sensor since boot — observedCheckinIntervalSeconds
+  // stays null until this reaches MIN_CHECKIN_SAMPLES, so a sensor that
+  // just started reporting doesn't get a noisy 1-2 sample interval
+  // published (which could trigger a premature "delayed"/"overdue" badge
+  // before we actually know its real cadence).
+  private checkinSampleCounts = new Map<string, number>();
+  private static readonly MIN_CHECKIN_SAMPLES = 3;
+  // Internal EMA accumulator, kept separate from the published
+  // observedCheckinIntervalSeconds field — the published field is null
+  // (and must stay null) below MIN_CHECKIN_SAMPLES, but the average still
+  // needs to keep accumulating underneath that gate rather than resetting
+  // every round just because it isn't published yet.
+  private checkinEstimateSeconds = new Map<string, number>();
 
   async boot(): Promise<void> {
     if (this.auth.count() === 0) {
@@ -104,6 +129,10 @@ export class LatchEngine {
     const subscription = subscribeDevices(
       consoleConfig,
       (reading) => this.ingest(reading),
+      (sensorId, timestamp) => {
+        this.recordSensorCheckin(sensorId, timestamp);
+        this.scheduleActivePull(consoleConfig, sensorId);
+      },
       (status) => {
         console.log(`[engine] console "${consoleConfig.name}" websocket ${status}`);
         this.setConsoleStatus(consoleConfig.id, { connectionState: status });
@@ -116,32 +145,125 @@ export class LatchEngine {
     );
     this.subscriptions.set(consoleConfig.id, subscription);
 
-    // Supplementary to the websocket, not a replacement for it: live
-    // testing against a real console showed the websocket reliably
-    // delivering *some* events (wireless signal strength, connectivity)
-    // but essentially never a metric value change for these battery
-    // sensors — API_NOTES.md's original "push is sufficient, no polling
-    // needed" call doesn't hold up under longer observation. Re-running
-    // discovery periodically re-fetches each sensor's current value via
-    // GET /v1/sensors (the same call discoverSensors already makes once
-    // at connect time) so values actually stay fresh even if the
-    // websocket never pushes a delta for them. Cadence is the console's
-    // own defaultIntervalSeconds — deliberately not faster, per CLAUDE.md
-    // ("don't poll faster than the sensor's own reporting interval").
-    const pollMs = consoleConfig.defaultIntervalSeconds * 1000;
+    // Safety net only — see scheduleActivePull for the primary freshness
+    // path. Live testing against a real console showed the websocket
+    // reliably delivering *some* events (wireless signal strength,
+    // connectivity, and — now that we listen for it — the touch itself)
+    // even when it rarely carries a metric value change directly, so a
+    // debounced pull on every touch is what actually keeps values fresh;
+    // this interval only covers the case where the websocket goes quiet
+    // without an explicit disconnect event.
+    const safetyPollMs =
+      Math.max(consoleConfig.defaultIntervalSeconds * LatchEngine.SAFETY_POLL_MULTIPLIER, LatchEngine.SAFETY_POLL_FLOOR_SECONDS) *
+      1000;
     const timer = setInterval(() => {
       this.discoverSensors(consoleConfig).catch((err) => {
-        console.error(`[engine] periodic re-discovery failed for console "${consoleConfig.name}":`, err);
+        console.error(`[engine] safety-net re-discovery failed for console "${consoleConfig.name}":`, err);
       });
-    }, pollMs);
-    this.pollTimers.set(consoleConfig.id, timer);
+    }, safetyPollMs);
+    this.safetyPollTimers.set(consoleConfig.id, timer);
+  }
+
+  // (Re)schedules a debounced GET /v1/sensors pull for this console —
+  // called on every sensor touch (see connectConsole's onSensorTouch
+  // wiring), accumulating which sensor(s) actually touched into
+  // pendingTouchedSensorIds. Coalesces a burst of near-simultaneous
+  // touches (e.g. three sensors on the same console reporting within a
+  // couple seconds of each other) into a single pull instead of one per
+  // touch: GET /v1/sensors already returns every sensor on the console in
+  // one call, so there's no benefit to firing it more than once per
+  // burst — but the pull only *applies* (ingests) a reading for the
+  // sensor(s) that actually touched, per discoverSensors' onlySensorIds.
+  // If sensor A touches and B/C ride along in the same bulk response
+  // without having touched themselves, their entry in that response is
+  // just Protect's last-known cache, not confirmation of anything new —
+  // treating it as a fresh reading would be exactly the kind of "we
+  // updated it, but nothing actually told us it changed" false freshness
+  // recordSensorCheckin/lastSeenAt were already built to avoid.
+  private pendingTouchedSensorIds = new Map<string, Set<string>>();
+
+  private scheduleActivePull(consoleConfig: ProtectConsole, sensorId: string): void {
+    const pending = this.pendingTouchedSensorIds.get(consoleConfig.id) ?? new Set<string>();
+    pending.add(sensorId);
+    this.pendingTouchedSensorIds.set(consoleConfig.id, pending);
+
+    const existing = this.activePullTimers.get(consoleConfig.id);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.activePullTimers.delete(consoleConfig.id);
+      const touchedIds = this.pendingTouchedSensorIds.get(consoleConfig.id) ?? new Set<string>();
+      this.pendingTouchedSensorIds.delete(consoleConfig.id);
+      this.discoverSensors(consoleConfig, { onlySensorIds: touchedIds }).catch((err) => {
+        console.error(`[engine] active pull failed for console "${consoleConfig.name}":`, err);
+      });
+    }, LatchEngine.ACTIVE_PULL_DEBOUNCE_MS);
+    this.activePullTimers.set(consoleConfig.id, timer);
+  }
+
+  // A sensor "touch" is any add/update websocket message naming this
+  // sensor, metric-bearing or not (see protect.ts's onSensorTouch) — the
+  // real "Protect just heard from this device" signal, independent of our
+  // own poll timing. observedCheckinIntervalSeconds is withheld until
+  // MIN_CHECKIN_SAMPLES gaps have been observed (see the field's class
+  // comment) so a sensor that just started reporting doesn't get flagged
+  // "delayed" off a noisy 1-2 sample guess.
+  private recordSensorCheckin(sensorId: string, timestamp: number): void {
+    const previousAt = this.lastCheckinAt.get(sensorId);
+    this.lastCheckinAt.set(sensorId, timestamp);
+
+    const current = this.sensorStatuses.get(sensorId);
+    let observedCheckinIntervalSeconds = current?.observedCheckinIntervalSeconds ?? null;
+
+    if (previousAt != null) {
+      const gapSeconds = (timestamp - previousAt) / 1000;
+      const sampleCount = (this.checkinSampleCounts.get(sensorId) ?? 0) + 1;
+      this.checkinSampleCounts.set(sensorId, sampleCount);
+
+      // Exponential moving average (alpha=0.3) — adapts to a real change
+      // in reporting cadence without one-shot network jitter swinging the
+      // estimate wildly. Accumulated in checkinEstimateSeconds regardless
+      // of the publish gate below, so it isn't reset back to a 1-sample
+      // guess every round while still under MIN_CHECKIN_SAMPLES.
+      const priorEstimate = this.checkinEstimateSeconds.get(sensorId);
+      const nextEstimate = priorEstimate == null ? gapSeconds : priorEstimate * 0.7 + gapSeconds * 0.3;
+      this.checkinEstimateSeconds.set(sensorId, nextEstimate);
+
+      observedCheckinIntervalSeconds = sampleCount >= LatchEngine.MIN_CHECKIN_SAMPLES ? Math.round(nextEstimate) : null;
+    }
+
+    this.sensorStatuses.set(sensorId, {
+      sensorId,
+      lastSeenAt: current?.lastSeenAt ?? null,
+      values: current?.values ?? {},
+      observedCheckinIntervalSeconds,
+      battery: current?.battery ?? null,
+    });
   }
 
   disconnectConsole(consoleId: string): void {
     this.subscriptions.get(consoleId)?.close();
     this.subscriptions.delete(consoleId);
-    clearInterval(this.pollTimers.get(consoleId));
-    this.pollTimers.delete(consoleId);
+    clearInterval(this.safetyPollTimers.get(consoleId));
+    this.safetyPollTimers.delete(consoleId);
+    clearTimeout(this.activePullTimers.get(consoleId));
+    this.activePullTimers.delete(consoleId);
+    this.pendingTouchedSensorIds.delete(consoleId);
+  }
+
+  // Merges in the latest known battery reading — called for every sensor
+  // in a GET /v1/sensors response regardless of onlySensorIds scoping
+  // (see discoverSensors below), since this isn't treated as a "reading"
+  // with a freshness claim, just the last known value, same as sensor
+  // metadata (name, enabled metrics).
+  private updateSensorBattery(sensorId: string, battery: { percentage: number | null; isLow: boolean } | null): void {
+    const current = this.sensorStatuses.get(sensorId);
+    this.sensorStatuses.set(sensorId, {
+      sensorId,
+      lastSeenAt: current?.lastSeenAt ?? null,
+      values: current?.values ?? {},
+      observedCheckinIntervalSeconds: current?.observedCheckinIntervalSeconds ?? null,
+      battery,
+    });
   }
 
   // Discovery-driven sensor list (SPEC.md section 12) — never hand-typed.
@@ -154,12 +276,28 @@ export class LatchEngine {
   // page and any rule watching that sensor would show "no data yet" for
   // however long it took the sensor to next report on its own — even
   // though the console already told us the value the moment we asked.
-  async discoverSensors(consoleConfig: ProtectConsole): Promise<void> {
+  //
+  // options.onlySensorIds, when given, restricts *ingestion* (readings,
+  // and everything that flows from a reading: SensorStatus.values/
+  // lastSeenAt, latch state evaluation) to that set — sensor metadata
+  // (name, enabled metrics) is still synced for every sensor in the
+  // response regardless, since that's identity/capability information,
+  // not a "did it just report" claim. Used by scheduleActivePull's
+  // debounced pull, which only knows a specific sensor (or a few) touched
+  // — every other sensor in the same bulk response is just Protect's
+  // last-known cache riding along in the same call, not confirmation that
+  // sensor itself has anything new. Omit (full discovery) at connect time
+  // and from the slow safety-net poll, where there's no touch to scope to
+  // and a full re-sync is the point.
+  async discoverSensors(consoleConfig: ProtectConsole, options?: { onlySensorIds?: Set<string> }): Promise<void> {
     const raw = await fetchRawSensors(consoleConfig);
     const now = Date.now();
     for (const r of raw) {
       const sensor = rawSensorToSensor(r);
       this.config.upsertSensor({ ...sensor, consoleId: consoleConfig.id });
+      this.updateSensorBattery(r.id, rawSensorBattery(r));
+
+      if (options?.onlySensorIds && !options.onlySensorIds.has(r.id)) continue;
 
       for (const reading of rawSensorToReadings(r.id, r, now)) {
         this.ingest(reading);
@@ -207,52 +345,45 @@ export class LatchEngine {
     return [...this.sensorStatuses.values()];
   }
 
-  // Resolves observed → console default for a given (sensorId, metric) —
-  // the one place Rule duration validation (POST/PATCH /api/latches) and
-  // the Rules page's duration-preset greying both go for "what interval
-  // should this duration be checked against." Returns null only if the
-  // sensor or its owning console can't be found.
-  getEffectiveInterval(sensorId: string, metric: Metric): EffectiveInterval | null {
-    const sensor = this.config.listSensors().find((s) => s.id === sensorId);
-    if (!sensor) return null;
-    const console_ = this.config.getProtectConsole(sensor.consoleId);
-    if (!console_) return null;
-
-    const observed = this.sensorStatuses.get(sensorId)?.observedIntervalSeconds[metric];
-    return effectiveInterval(observed, console_.defaultIntervalSeconds);
-  }
-
   // Ingest entrypoint — called for every reading, whether from a live
-  // websocket push or (in tests) directly. Updates sensor/console status
-  // (see above) for *every* reading, regardless of whether a latch exists
-  // for it — the dashboard should show a sensor is alive even before
-  // anyone's configured a rule against it. Then applies the reading to
-  // every enabled latch watching that (sensorId, metric) pair and
-  // dispatches the configured webhook on a fired/resolved transition.
+  // websocket push, a GET /v1/sensors pull, or (in tests) directly.
+  // Updates sensor/console status (see above) for *every* reading,
+  // regardless of whether a latch exists for it — the dashboard should
+  // show a sensor is alive even before anyone's configured a rule against
+  // it. Then applies the reading to every enabled latch watching that
+  // (sensorId, metric) pair and dispatches the configured webhook on a
+  // fired/resolved transition.
+  //
+  // Does NOT touch observedCheckinIntervalSeconds — a GET pull re-ingests
+  // every sensor on the console regardless of which one actually changed,
+  // so timing gaps between ingest() calls reflect our own pull cadence,
+  // not the physical device's real check-in rate. That's tracked
+  // separately, only from real websocket touches — see
+  // recordSensorCheckin.
+  //
+  // lastSeenAt is deliberately NOT set to reading.timestamp either, for
+  // the same reason: a bulk GET /v1/sensors pull returns every sensor's
+  // *current cached* value regardless of which sensor's touch actually
+  // triggered the pull, so blindly stamping "now" here would make an
+  // untouched sensor look freshly-reported just because a different
+  // sensor on the same console happened to check in. lastSeenAt instead
+  // mirrors lastCheckinAt (this sensor's own last real touch) once we
+  // have one, falling back to the pull time only before any touch has
+  // ever been observed for it (e.g. right after connect/discovery, when
+  // "the last time we know anything" genuinely is "when we first asked").
+  // The reading's *value* itself is still applied unconditionally below —
+  // Protect's cache is the best known current value regardless of when it
+  // last changed, only the "is this fresh" signal needs the distinction.
   ingest(reading: Reading): void {
     const sensor = this.config.listSensors().find((s) => s.id === reading.sensorId);
-
     const currentSensorStatus = this.sensorStatuses.get(reading.sensorId);
-    const historyKey = `${reading.sensorId}:${reading.metric}`;
-    const previousAt = this.lastReadingAt.get(historyKey);
-    this.lastReadingAt.set(historyKey, reading.timestamp);
-
-    let observedIntervalSeconds = currentSensorStatus?.observedIntervalSeconds ?? {};
-    if (previousAt != null) {
-      const gapSeconds = (reading.timestamp - previousAt) / 1000;
-      // Exponential moving average (alpha=0.3) rather than a plain mean —
-      // adapts to a real change in reporting cadence without one-shot
-      // network jitter swinging the estimate wildly.
-      const priorEstimate = observedIntervalSeconds[reading.metric];
-      const nextEstimate = priorEstimate == null ? gapSeconds : priorEstimate * 0.7 + gapSeconds * 0.3;
-      observedIntervalSeconds = { ...observedIntervalSeconds, [reading.metric]: Math.round(nextEstimate) };
-    }
 
     this.sensorStatuses.set(reading.sensorId, {
       sensorId: reading.sensorId,
-      lastSeenAt: reading.timestamp,
+      lastSeenAt: this.lastCheckinAt.get(reading.sensorId) ?? reading.timestamp,
       values: { ...currentSensorStatus?.values, [reading.metric]: reading.value },
-      observedIntervalSeconds,
+      observedCheckinIntervalSeconds: currentSensorStatus?.observedCheckinIntervalSeconds ?? null,
+      battery: currentSensorStatus?.battery ?? null,
     });
     if (sensor) {
       this.setConsoleStatus(sensor.consoleId, { lastEventAt: reading.timestamp });

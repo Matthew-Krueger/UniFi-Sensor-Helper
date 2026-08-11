@@ -1,10 +1,116 @@
 "use client";
 
 import * as React from "react";
+import { useTheme } from "next-themes";
+import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { validatePassword } from "@unifi-sensor-latch/shared";
+import { useCurrentUser } from "@/lib/useCurrentUser";
+
+// Full-size counterpart to ThemeToggle (components/theme-toggle.tsx) —
+// that one stays in the nav as a one-click shortcut, this is the same
+// underlying next-themes state, just presented as a labeled segmented
+// control for the settings page instead of a single icon button.
+function AppearanceCard() {
+  const { resolvedTheme, setTheme } = useTheme();
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Appearance</CardTitle>
+        <CardDescription>Applies to this browser — not saved to your account.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="inline-flex gap-1 rounded-md border border-border p-1">
+          <Button
+            type="button"
+            size="sm"
+            variant={mounted && resolvedTheme === "light" ? "default" : "ghost"}
+            disabled={!mounted}
+            onClick={() => setTheme("light")}
+          >
+            <Sun className="h-4 w-4" />
+            Light
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={mounted && resolvedTheme === "dark" ? "default" : "ghost"}
+            disabled={!mounted}
+            onClick={() => setTheme("dark")}
+          >
+            <Moon className="h-4 w-4" />
+            Dark
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Full-size counterpart to TemperatureUnitToggle (components/
+// temperature-unit-toggle.tsx) — same PATCH /api/account/preferences
+// call, just presented as a labeled segmented control here instead of a
+// single °C/°F button in the nav.
+function UnitsCard() {
+  const { user, setUser } = useCurrentUser();
+  const [saving, setSaving] = React.useState(false);
+
+  async function setUnit(next: "C" | "F") {
+    if (!user || user.temperatureUnit === next) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/account/preferences", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ temperatureUnit: next }),
+      });
+      if (res.ok) {
+        const body = await res.json();
+        setUser(body.user);
+      }
+    } catch (err) {
+      console.error("[settings] failed to save temperature unit:", err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Units</CardTitle>
+        <CardDescription>Display only — sensor values are always stored and evaluated in Celsius.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="inline-flex gap-1 rounded-md border border-border p-1">
+          <Button
+            type="button"
+            size="sm"
+            variant={user?.temperatureUnit === "C" ? "default" : "ghost"}
+            disabled={!user || saving}
+            onClick={() => setUnit("C")}
+          >
+            °C Celsius
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={user?.temperatureUnit === "F" ? "default" : "ghost"}
+            disabled={!user || saving}
+            onClick={() => setUnit("F")}
+          >
+            °F Fahrenheit
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function SettingsPage() {
   const [currentPassword, setCurrentPassword] = React.useState("");
@@ -52,6 +158,9 @@ export default function SettingsPage() {
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-2xl font-semibold">Settings</h1>
+
+      <AppearanceCard />
+      <UnitsCard />
 
       <Card>
         <CardHeader>

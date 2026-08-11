@@ -88,6 +88,15 @@ export function validateCondition(condition: RuleCondition): ConditionValidation
   return { valid: true };
 }
 
+// Rounds to at most 2 decimals and drops a trailing ".00"/".50" back to a
+// plain integer or short decimal — a defensive display-layer pass on top
+// of whatever precision the value already carries (e.g. apps/web/lib/
+// units.ts's C<->F conversion), so a value that somehow still has float
+// noise (93.33333333333333) never reaches the screen.
+function formatNumber(n: number): string {
+  return String(Math.round(n * 100) / 100);
+}
+
 // Plain-language summary for the Rules table and Dashboard — unitSuffix
 // lets a caller append e.g. "°F" without this module knowing about
 // metric-specific formatting (that's the Sensors page's job already, see
@@ -95,13 +104,13 @@ export function validateCondition(condition: RuleCondition): ConditionValidation
 export function conditionSummary(condition: RuleCondition, unitSuffix = ""): string {
   switch (condition.type) {
     case "above":
-      return `above ${condition.threshold}${unitSuffix}`;
+      return `above ${formatNumber(condition.threshold)}${unitSuffix}`;
     case "below":
-      return `below ${condition.threshold}${unitSuffix}`;
+      return `below ${formatNumber(condition.threshold)}${unitSuffix}`;
     case "between": {
       const hysteresisLabel =
         condition.hysteresis.mode === "auto" ? `, ±${condition.hysteresis.marginPercent}% auto` : "";
-      return `between ${condition.low}${unitSuffix} and ${condition.high}${unitSuffix}${hysteresisLabel}`;
+      return `between ${formatNumber(condition.low)}${unitSuffix} and ${formatNumber(condition.high)}${unitSuffix}${hysteresisLabel}`;
     }
   }
 }

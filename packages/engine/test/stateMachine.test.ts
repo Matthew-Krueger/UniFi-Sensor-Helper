@@ -11,6 +11,7 @@ import { applyReading, initialState } from "../src/stateMachine";
 
 const freezerLatch: Latch = {
   id: "freezer-temp",
+  name: null,
   sensorId: "sensor-1",
   metric: "temperature",
   condition: { type: "above", threshold: 55, hysteresis: { mode: "manual", clearThreshold: 38 } },
@@ -105,6 +106,7 @@ describe("latch state machine", () => {
 
 const rangeLatch: Latch = {
   id: "freezer-range",
+  name: null,
   sensorId: "sensor-1",
   metric: "temperature",
   condition: {

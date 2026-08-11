@@ -266,8 +266,8 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
                 placeholder="e.g. freezer-alerts"
               />
               <p className="text-xs text-muted-foreground">
-                Matches the ID on a "trigger via webhook" Alarm Manager rule you create once in Protect's own UI
-                (SPEC.md §7). Rules that deliver to this console default to this ID{host && defaultWebhookId ? ":" : "."}
+                Matches the ID on a "trigger via webhook" Alarm Manager rule you create once in Protect's own UI.
+                Rules that deliver to this console default to this ID{host && defaultWebhookId ? ":" : "."}
               </p>
               {host && defaultWebhookId && (
                 <p className="break-all font-mono text-xs text-muted-foreground">
@@ -336,7 +336,15 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
                     </div>
                   )}
                   <div>{status?.sensorCount ?? 0} sensor{status?.sensorCount === 1 ? "" : "s"} discovered</div>
-                  <div title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined}>
+                  {/* suppressHydrationWarning — "X ago" text is derived from
+                      Date.now() at render time, so the server's render and
+                      the client's first-paint render a moment later will
+                      almost always differ by a second or two; this is the
+                      officially recommended way to silence that expected
+                      mismatch without discarding the subtree (see Next.js
+                      hydration-error docs). useNowTick re-renders with the
+                      live value every second after mount regardless. */}
+                  <div title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined} suppressHydrationWarning>
                     Last contacted: {preciseAgoLabel(status?.lastEventAt ?? null)}
                   </div>
                   <div className="flex items-center gap-2">

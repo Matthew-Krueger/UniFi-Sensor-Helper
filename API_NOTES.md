@@ -119,6 +119,54 @@ with no interval to choose at all, since Protect would push changes as
 they happen — that held for connectivity events but not, as far as
 this session could observe, for sensor value changes.)*
 
+- **Decision, re-revised (2026-08-10)**: the fixed-cadence periodic
+  re-poll above was itself corrupting the one signal it was meant to
+  measure. `SensorStatus.observedIntervalSeconds` was computed from gaps
+  between `ingest()` calls, but the periodic poll forced an `ingest()`
+  for every sensor on the console every cycle regardless of whether
+  anything changed — so the "observed interval" had converged to "our own
+  poll timer," not the physical device's real check-in rate, and rule
+  duration validation was gating against a number that was really just
+  reflecting our own polling code back at itself.
+  Replaced with: every websocket message naming a sensor (`type=update`/
+  `add`, `modelKey=sensor`) — metric-bearing or not — is now treated as a
+  "touch" and (a) feeds a per-sensor rolling-average
+  `observedCheckinIntervalSeconds` independent of any poll, and (b)
+  (re)schedules a debounced `GET /v1/sensors` pull (~3s quiet window,
+  coalescing a burst of near-simultaneous touches into one bulk call)
+  instead of firing on a blind timer. The old fixed-interval poll is now
+  a slow safety net only (4x the console's `defaultIntervalSeconds`,
+  15-minute floor), covering the case where the websocket goes quiet
+  without an explicit disconnect. See `singleton.ts`'s
+  `recordSensorCheckin`/`scheduleActivePull`.
+- **Follow-up finding (2026-08-10)**: live logs against a real console show
+  the *same* 3 sensor ids "touching" together, in the same order, on a
+  regular ~40s cycle, always with zero metric-bearing fields, interleaved
+  with a `modelKey=bridge` update. That's not independent per-sensor
+  reporting — it's the wireless bridge's own connectivity/signal-strength
+  sweep across its mesh (confirmed against the OpenAPI schema:
+  `wirelessConnectionState` — `signalState`/`batteryStatus`/`bridge` — is
+  exactly the shape of data this touch carries) being relayed as if each
+  sensor individually changed. **Checked both spec files
+  (`Unifi API Specs/protect_v7.1.87_openapi.json` and the Postman
+  collection) for any per-metric "last measured at" timestamp or an
+  exposed reporting-interval/frequency setting on `sensor`, `sensorStats`,
+  `bridge`, or `wirelessConnectionState` — none exists.** The API has no
+  field anywhere that states how often a sensor actually takes a new
+  measurement; `GET /v1/sensors` returns current value + status only, no
+  freshness metadata. Practical effect:
+  `SensorStatus.observedCheckinIntervalSeconds` measures "how often
+  Protect/the bridge tells us this sensor's record touched," which is
+  probably *faster* than the sensor's real measurement cadence (a
+  connectivity heartbeat vs. an actual new reading) — so it should be
+  read as a lower bound, not a confirmed reporting rate. Project decision:
+  kept as the authoritative number for rule-duration validation anyway
+  (real, observed, per-sensor data beats a static guess), but the Rules
+  page now tells the operator to independently check the sensor's real
+  "update frequency" in the Protect app itself and set the duration to at
+  least 2x — ideally 3x — that value, since we can't verify it via this
+  API.
+
 ### `POST /v1/alarm-manager/webhook/{id}`
 
 - **Method**: POST. **Auth**: `X-API-Key` header (consistent with every

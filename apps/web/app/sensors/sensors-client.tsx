@@ -1,29 +1,31 @@
 "use client";
 
 import * as React from "react";
-import { Droplets, Sun, Thermometer, TriangleAlert, Gauge } from "lucide-react";
+import { Battery, BatteryWarning, Droplets, Sun, Thermometer, TriangleAlert, Gauge } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ConsoleStatus, ProtectConsole, Sensor, SensorStatus } from "@unifi-sensor-latch/shared";
-import { DURATION_PRESETS, effectiveInterval } from "@unifi-sensor-latch/shared";
+import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
 import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { reportingBadge } from "@/lib/reportingBadge";
 import { celsiusToFahrenheit } from "@/lib/units";
 
 // Discovery-driven — SPEC.md section 12: sensors are never hand-typed, only
 // ever listed from what /api/sensors/discover found on a configured
 // console. If no console is configured yet, this page points to Consoles.
 //
-// Grouped by console, one card per console containing its sensors —
-// reporting status ("last contacted"/"reporting every"/good-delayed-
-// overdue) is shown once per console, not once per sensor, because
-// that's genuinely what it is: sensors are always fetched in one bulk
-// GET /v1/sensors call per console, so every sensor on a console shares
-// the exact same "when did we last hear anything" and "how often does
-// that happen" answer. Showing it per-sensor was redundant and implied a
-// per-sensor cadence that was never real.
+// Grouped by console, one card per console containing its sensors. The
+// console-level header still shows its own "last contacted"/"reporting
+// every" summary (connection-level: is the console itself reachable —
+// see ConsoleStatus.lastEventAt, bumped by any successful pull regardless
+// of which sensor triggered it). Each sensor card additionally shows its
+// *own* reporting badge and last-seen time — now genuinely independent
+// per sensor, derived from that specific sensor's real websocket touches
+// (see singleton.ts's recordSensorCheckin), not a shared poll signal the
+// way it used to be.
 const POLL_MS = 5000;
 const INTERVAL_PRESETS = DURATION_PRESETS;
 
@@ -33,31 +35,6 @@ function formatInterval(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   return `${Math.round(seconds / 3600)}h`;
-}
-
-// Color reflects staleness relative to the console's effective interval
-// (observed > console-default — see interval.ts). useNowTick (called in
-// the page component) re-renders this every second regardless of the 5s
-// data-poll cadence, specifically so a client that hasn't checked in for
-// a few seconds can never be the reason something looks stale — elapsed
-// time is always computed against the real clock at render time, not
-// against when data last arrived over the wire.
-const GOOD_MULTIPLIER = 1.5; // within/close to the expected window
-const WARN_MULTIPLIER = 3; // "delayed" — user's explicit 3x threshold
-
-function reportingBadge(
-  lastEventAt: number | null,
-  observedSeconds: number | null,
-  defaultIntervalSeconds: number
-): { variant: "idle" | "good" | "armed" | "fired"; label: string } {
-  if (!lastEventAt) return { variant: "idle", label: "no data yet" };
-
-  const expectedSeconds = effectiveInterval(observedSeconds, defaultIntervalSeconds).seconds;
-  const elapsedSeconds = (Date.now() - lastEventAt) / 1000;
-
-  if (elapsedSeconds <= expectedSeconds * GOOD_MULTIPLIER) return { variant: "good", label: "reporting" };
-  if (elapsedSeconds <= expectedSeconds * WARN_MULTIPLIER) return { variant: "armed", label: "delayed" };
-  return { variant: "fired", label: "overdue" };
 }
 
 // Sensor values are always stored/evaluated in Celsius (SPEC.md) — unit is
@@ -90,6 +67,29 @@ const METRIC_ICONS: Record<string, React.ComponentType<{ className?: string }>> 
 function MetricIcon({ metric }: { metric: string }) {
   const Icon = METRIC_ICONS[metric] ?? Gauge;
   return <Icon className="h-4 w-4 text-purple-600 dark:text-purple-400" />;
+}
+
+const BATTERY_RED_THRESHOLD = 10;
+const BATTERY_YELLOW_THRESHOLD = 20;
+
+// Wired/mains sensors have no batteryStatus at all (rawSensorBattery
+// returns null) — nothing renders for those rather than a fake "0%". Same
+// Badge component/variant palette as the reporting badge right next to
+// it (good/armed/fired), so the two read as one consistent status row
+// rather than two different visual languages.
+function BatteryIndicator({ battery }: { battery: SensorStatus["battery"] }) {
+  if (!battery || battery.percentage == null) return null;
+  const pct = battery.percentage;
+  const low = pct < BATTERY_RED_THRESHOLD;
+  const warn = pct < BATTERY_YELLOW_THRESHOLD;
+  const variant = low ? "fired" : warn ? "armed" : "good";
+  const Icon = warn ? BatteryWarning : Battery;
+  return (
+    <Badge variant={variant} className="gap-1 text-[10px]" title={`Battery ${pct}%`}>
+      <Icon className="h-3 w-3" />
+      {pct}%
+    </Badge>
+  );
 }
 
 // Picks a column count explicitly by item count rather than leaving it to
@@ -210,8 +210,16 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
         <h1 className="text-2xl font-semibold">Sensors</h1>
         {canDiscover && (
           <div className="flex items-center gap-2">
+            {/* suppressHydrationWarning below — "X ago" text is derived from
+                Date.now() at render time, so the server's render and the
+                client's first-paint render a moment later will almost
+                always differ by a second or two; this is the officially
+                recommended way to silence that expected mismatch without
+                discarding the subtree (see Next.js hydration-error docs).
+                useNowTick re-renders with the live value every second
+                after mount regardless. */}
             {lastRefreshedAt && !loading && (
-              <span className="text-xs text-muted-foreground" title={absoluteTimeLabel(lastRefreshedAt)}>
+              <span className="text-xs text-muted-foreground" title={absoluteTimeLabel(lastRefreshedAt)} suppressHydrationWarning>
                 Refreshed {preciseAgoLabel(lastRefreshedAt)}
               </span>
             )}
@@ -227,6 +235,11 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
           </div>
         )}
       </div>
+
+      <p className="text-xs text-muted-foreground">
+        "Last contacted" and "last seen" show when we last heard from Protect about a sensor, not when the sensor
+        itself last checked in — Protect doesn't tell us that directly, so this is the closest signal available.
+      </p>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
@@ -254,15 +267,16 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
 
             const status = consoleStatuses.find((s) => s.consoleId === console_.id);
 
-            // Aggregate observed interval across this console's sensors —
-            // they all update together in one bulk fetch, so per-sensor
-            // observed values are redundant copies of the same signal;
-            // the minimum is the most conservative (fastest-expected)
-            // read for the staleness check below.
-            const observedValues = consoleSensors.flatMap((s) => {
-              const st = statuses.find((x) => x.sensorId === s.id);
-              return st ? Object.values(st.observedIntervalSeconds).filter((v): v is number => v != null) : [];
-            });
+            // Aggregate observed checkin interval across this console's
+            // sensors — each sensor's own interval is now genuinely
+            // independent (derived from that specific sensor's real
+            // websocket touches, not our shared poll cadence — see
+            // singleton.ts's recordSensorCheckin), so the minimum is the
+            // most conservative (fastest-expected) read for the
+            // console-level staleness check below.
+            const observedValues = consoleSensors
+              .map((s) => statuses.find((x) => x.sensorId === s.id)?.observedCheckinIntervalSeconds)
+              .filter((v): v is number => v != null);
             const observedSeconds = observedValues.length > 0 ? Math.min(...observedValues) : null;
             const badge = reportingBadge(status?.lastEventAt ?? null, observedSeconds, console_.defaultIntervalSeconds);
 
@@ -273,7 +287,11 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
                     <CardTitle>{console_.name}</CardTitle>
                     <Badge variant={badge.variant}>{badge.label}</Badge>
                   </div>
-                  <CardDescription title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined}>
+                  {/* suppressHydrationWarning — see the Refreshed span above */}
+                  <CardDescription
+                    title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined}
+                    suppressHydrationWarning
+                  >
                     Last contacted: {preciseAgoLabel(status?.lastEventAt ?? null)}
                     {observedSeconds != null && ` · reporting every ~${formatInterval(observedSeconds)}`}
                   </CardDescription>
@@ -282,12 +300,33 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
                   <div className={`grid gap-3 ${gridColsForCount(consoleSensors.length)}`}>
                     {consoleSensors.map((sensor) => {
                       const sensorStatus = statuses.find((s) => s.sensorId === sensor.id);
+                      const sensorBadge = reportingBadge(
+                        sensorStatus?.lastSeenAt ?? null,
+                        sensorStatus?.observedCheckinIntervalSeconds ?? null,
+                        console_.defaultIntervalSeconds
+                      );
                       return (
                         <div
                           key={sensor.id}
-                          className="flex flex-col items-center gap-2 rounded-lg border border-purple-200/60 bg-purple-50/50 p-3 text-center backdrop-blur-sm dark:border-purple-800/40 dark:bg-purple-950/30"
+                          className="flex flex-col items-center gap-1 rounded-lg border border-purple-200/60 bg-purple-50/50 p-3 text-center backdrop-blur-sm dark:border-purple-800/40 dark:bg-purple-950/30"
                         >
                           <p className="text-sm font-medium">{sensor.name}</p>
+                          <div className="flex items-center gap-1.5">
+                            <BatteryIndicator battery={sensorStatus?.battery ?? null} />
+                            <Badge variant={sensorBadge.variant} className="text-[10px]">
+                              {sensorBadge.label}
+                            </Badge>
+                            {/* suppressHydrationWarning — see the Refreshed span above */}
+                            <span
+                              className="text-[10px] text-muted-foreground"
+                              title={sensorStatus?.lastSeenAt ? absoluteTimeLabel(sensorStatus.lastSeenAt) : undefined}
+                              suppressHydrationWarning
+                            >
+                              {preciseAgoLabel(sensorStatus?.lastSeenAt ?? null)}
+                              {sensorStatus?.observedCheckinIntervalSeconds != null &&
+                                ` · ~${formatInterval(sensorStatus.observedCheckinIntervalSeconds)}`}
+                            </span>
+                          </div>
                           {sensor.metrics.length === 0 ? (
                             <span className="text-xs text-muted-foreground">No metrics enabled</span>
                           ) : (

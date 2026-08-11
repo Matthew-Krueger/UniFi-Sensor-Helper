@@ -1,0 +1,1 @@
+ALTER TABLE `latches` ADD `name` text;

@@ -1,9 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEngine } from "@unifi-sensor-latch/engine";
-import { intervalTooShortMessage, isDurationValid, validateCondition, validateWebhookTarget } from "@unifi-sensor-latch/shared";
+import {
+  intervalTooShortMessage,
+  isDurationValid,
+  latchNameSchema,
+  validateCondition,
+  validateWebhookTarget,
+} from "@unifi-sensor-latch/shared";
 import type { Latch } from "@unifi-sensor-latch/shared";
 import { requireRole } from "@/lib/auth";
 import { redactLatch } from "@/lib/latchRedaction";
+
+// Empty string and null both mean "no name" — normalized to null so the
+// stored value and the UI's "does this rule have a name" check
+// (rules-client.tsx) only ever have to handle one falsy case, not two.
+function normalizeLatchName(raw: unknown): { ok: true; name: string | null } | { ok: false; error: string } {
+  if (raw == null || raw === "") return { ok: true, name: null };
+  const check = latchNameSchema.safeParse(raw);
+  if (!check.success) return { ok: false, error: check.error.issues[0]?.message ?? "invalid name" };
+  return { ok: true, name: check.data };
+}
 
 export async function GET() {
   const actor = await requireRole("user");
@@ -17,6 +33,12 @@ export async function POST(req: NextRequest) {
   if (actor instanceof NextResponse) return actor;
 
   const latch = (await req.json()) as Latch;
+
+  const nameCheck = normalizeLatchName(latch.name);
+  if (!nameCheck.ok) {
+    return NextResponse.json({ error: nameCheck.error }, { status: 400 });
+  }
+  latch.name = nameCheck.name;
 
   const conditionCheck = validateCondition(latch.condition);
   if (!conditionCheck.valid) {
@@ -34,12 +56,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const engine = getEngine();
-  const interval = engine.getEffectiveInterval(latch.sensorId, latch.metric);
-  if (interval && !isDurationValid(latch.durationSeconds, interval)) {
-    return NextResponse.json({ error: intervalTooShortMessage(latch.durationSeconds, interval) }, { status: 400 });
+  if (!isDurationValid(latch.durationSeconds)) {
+    return NextResponse.json({ error: intervalTooShortMessage(latch.durationSeconds) }, { status: 400 });
   }
 
+  const engine = getEngine();
   engine.config.upsertLatch(latch);
   return NextResponse.json({ latch: redactLatch(latch, actor.role) }, { status: 201 });
 }

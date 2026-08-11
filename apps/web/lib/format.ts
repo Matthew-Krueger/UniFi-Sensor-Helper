@@ -24,6 +24,23 @@ export function preciseAgoLabel(timestamp: number | null): string {
   return `${parts.join(" ")} ago`;
 }
 
+// Single-unit "5m ago"/"2h ago" bucketing — the deliberately imprecise
+// counterpart to preciseAgoLabel, for table cells where the point is
+// scanability at a glance (Rules page's "Last used" column) rather than
+// precision; the exact to-the-second value still lives one click away
+// (preciseAgoLabel + absoluteTimeLabel, e.g. in a details dialog).
+export function coarseAgoLabel(timestamp: number | null): string {
+  if (!timestamp) return "never";
+  const totalSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (totalSeconds < 60) return "just now";
+  const days = Math.floor(totalSeconds / 86400);
+  if (days > 0) return `${days}d ago`;
+  const hours = Math.floor(totalSeconds / 3600);
+  if (hours > 0) return `${hours}h ago`;
+  const minutes = Math.floor(totalSeconds / 60);
+  return `${minutes}m ago`;
+}
+
 // Compact "1d 2h 3m" style for a plain span of time (not "ago" from now)
 // — skips zero units, so it matches the level of precision a custom
 // DD:HH:MM:SS rule duration actually offers instead of collapsing

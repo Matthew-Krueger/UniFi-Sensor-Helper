@@ -72,6 +72,11 @@ export type WebhookTarget =
 
 export interface Latch {
   id: string;
+  // Operator-chosen label, e.g. "Freezer too warm" — optional; when unset,
+  // the UI falls back to an auto-generated "{sensor} {condition}"
+  // description (see apps/web/app/rules/rules-client.tsx's ruleDescription)
+  // rather than requiring every rule to be named.
+  name: string | null;
   sensorId: string;
   metric: Metric;
   condition: RuleCondition;
@@ -148,12 +153,23 @@ export interface SensorStatus {
   sensorId: string;
   lastSeenAt: number | null;
   values: Partial<Record<Metric, number>>;
-  // Rolling-average gap (seconds) between successive readings of each
-  // metric, measured from real timestamps — not configuration, ground
-  // truth. Present once we've seen ≥2 readings for that metric. See
-  // singleton.ts's ingest() for how it's computed and interval.ts for how
-  // it's used (takes priority over the console default).
-  observedIntervalSeconds: Partial<Record<Metric, number>>;
+  // Rolling-average gap (seconds) between successive times Protect told us
+  // (over the websocket) that this sensor's record changed — metric-bearing
+  // or not, and independent of our own GET /v1/sensors poll cadence, so
+  // this is a much truer read of the physical device's real check-in rate
+  // than timing our own polling ever was (that just measured our poll
+  // timer). Stays null until MIN_CHECKIN_SAMPLES real gaps have been
+  // observed (see singleton.ts's recordSensorCheckin) — a 1-2 sample
+  // estimate right after a sensor first connects is noisy enough to cause
+  // a false "delayed" badge, so it's withheld rather than published early.
+  observedCheckinIntervalSeconds: number | null;
+  // Battery charge, synced from GET /v1/sensors on every discovery/pull
+  // regardless of the touch-scoping ingest() applies to readings (see
+  // singleton.ts's discoverSensors) — treated like device metadata (name,
+  // enabled metrics), not a "reading," since there's no freshness claim
+  // being made here beyond "our last known value." Null for a wired/mains
+  // sensor with no battery, or before we've ever fetched this sensor.
+  battery: { percentage: number | null; isLow: boolean } | null;
 }
 
 // Three-tier role model (SPEC.md section 3):

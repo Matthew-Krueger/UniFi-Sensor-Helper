@@ -21,16 +21,17 @@ import type {
 } from "@unifi-sensor-latch/shared";
 import {
   DURATION_PRESETS,
+  MIN_DURATION_SECONDS,
   buildConsoleWebhookUrl,
   conditionSummary,
-  effectiveInterval,
   isDurationValid,
   validateCondition,
   validateWebhookTarget,
 } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { metricUnitSuffix, toDisplayCondition, toStoredValue } from "@/lib/units";
-import { absoluteTimeLabel, formatDuration, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { absoluteTimeLabel, coarseAgoLabel, formatDuration, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { reportingBadge } from "@/lib/reportingBadge";
 
 // CRUD over /api/latches — "Rule" is the user-facing name for what the
 // domain model (SPEC.md section 4) and API still call a Latch internally;
@@ -105,10 +106,15 @@ function buildWebhookTarget(v: WebhookFormValue): WebhookTarget {
 }
 
 // Duration can be picked from the Unifi-matched preset list or typed as
-// an arbitrary DD:HH:MM:SS — the server only ever validates the resulting
-// total seconds against the sensor's effective interval (see
-// /api/latches's route), it was never actually restricted to the preset
-// list, so this is a pure UI addition, no API change needed.
+// an arbitrary DD:HH:MM — the server only ever validates the resulting
+// total seconds against the flat MIN_DURATION_SECONDS floor (see
+// /api/latches's route and shared/src/interval.ts), it was never actually
+// restricted to the preset list, so this is a pure UI addition, no API
+// change needed. Seconds isn't a user-facing field (nothing here can
+// react faster than a minute anyway — see MIN_DURATION_SECONDS) but stays
+// in FormState/round-trips through secondsToParts/partsToSeconds so
+// editing a rule that was saved with a sub-minute seconds component (from
+// before that floor existed) doesn't silently truncate it on save.
 function secondsToParts(totalSeconds: number): { days: string; hours: string; minutes: string; seconds: string } {
   let s = Math.max(0, Math.floor(totalSeconds));
   const days = Math.floor(s / 86400);
@@ -133,6 +139,7 @@ function getDurationSeconds(form: FormState): number | null {
 }
 
 const emptyForm = {
+  name: "",
   sensorId: "",
   metric: "" as Sensor["metrics"][number] | "",
   conditionType: "above" as ConditionType,
@@ -195,6 +202,20 @@ function deliveryBadgeVariant(delivery: WebhookDelivery): "good" | "fired" {
 function consoleWebhookLabel(target: Extract<WebhookTarget, { kind: "console" }>, consoles: ProtectConsole[]): string {
   const name = consoles.find((c) => c.id === target.consoleId)?.name ?? "unknown console";
   return `Console: ${name} / ${target.webhookId}`;
+}
+
+// Self-contained plain-English summary of what a rule does — the Rules
+// table's declutter collapses Metric/Condition/Duration into this one
+// sentence (see RulesClient's table below); the exact structured
+// breakdown (condition type, thresholds, hysteresis, duration presets)
+// is still fully editable in the create/edit dialog and viewable in the
+// details dialog, this is just the at-a-glance version.
+function ruleDescription(rule: RuleRow, sensorLabel: string, temperatureUnit: "C" | "F"): string {
+  const summary = conditionSummary(
+    toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
+    metricUnitSuffix(rule.metric, temperatureUnit)
+  );
+  return `If ${sensorLabel} is ${summary} for ${formatDuration(rule.durationSeconds)}`;
 }
 
 // Shared by the fired and resolved webhook sections of the rule form —
@@ -352,6 +373,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   const [open, setOpen] = React.useState(false);
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [historyRuleId, setHistoryRuleId] = React.useState<string | null>(null);
+  const [detailsRuleId, setDetailsRuleId] = React.useState<string | null>(null);
   const [testingId, setTestingId] = React.useState<string | null>(null);
   const [form, setForm] = React.useState<FormState>(emptyForm);
   const [error, setError] = React.useState<string | null>(null);
@@ -398,47 +420,25 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
     return sensors.find((s) => s.id === id)?.name ?? id;
   }
 
-  // Same priority as the server-side check (see /api/latches's route) —
-  // observed interval (real measured gap) beats the owning console's
-  // default. Used only to grey out too-short duration presets before
-  // submit; the server-side check in /api/latches is the actual gate
-  // (CLAUDE.md trust boundaries).
-  const selectedInterval = React.useMemo(() => {
-    if (!selectedSensor || !form.metric) return null;
-    const console_ = consoles.find((c) => c.id === selectedSensor.consoleId);
-    if (!console_) return null;
-    const observed = sensorStatuses.find((s) => s.sensorId === selectedSensor.id)?.observedIntervalSeconds[
-      form.metric
-    ];
-    return effectiveInterval(observed, console_.defaultIntervalSeconds);
-  }, [selectedSensor, form.metric, consoles, sensorStatuses]);
+  // Lets the create/edit form show whether the sensor being configured is
+  // actually reporting right now, before the operator commits to a
+  // duration against it — same badge/thresholds as the Sensors page (see
+  // lib/reportingBadge.ts), sourced from the same per-sensor checkin data.
+  function sensorReportingStatus(sensorId: string): { badge: ReturnType<typeof reportingBadge>; status?: SensorStatus } {
+    const sensor = sensors.find((s) => s.id === sensorId);
+    const status = sensorStatuses.find((s) => s.sensorId === sensorId);
+    const console_ = sensor ? consoles.find((c) => c.id === sensor.consoleId) : undefined;
+    const badge = reportingBadge(
+      status?.lastSeenAt ?? null,
+      status?.observedCheckinIntervalSeconds ?? null,
+      console_?.defaultIntervalSeconds ?? 300
+    );
+    return { badge, status };
+  }
 
-  const customDurationSeconds = partsToSeconds(form.customDays, form.customHours, form.customMinutes, form.customSeconds);
   const customDurationTooShort =
-    form.durationMode === "custom" && selectedInterval != null && customDurationSeconds < selectedInterval.seconds;
-
-  // Below the interval floor is a hard rejection (customDurationTooShort /
-  // the disabled preset options above) — this is a softer, non-blocking
-  // nudge for the zone just above that floor. A duration of exactly 1x the
-  // interval only guarantees one more reading arrives before firing; a
-  // single delayed/flaky sample right at that edge is enough to trip it
-  // (see the false-positive note below). 2x still isn't a reliable margin —
-  // it assumes the physical sensor itself reports to Protect on a cadence
-  // that lines up with our poll, but a sensor that misses its own check-in
-  // once can blow straight through a 2x window with zero confirming
-  // readings. 3x gives enough slack that a single missed sensor check-in
-  // doesn't collapse the debounce to one sample. Not enforced as a floor: a
-  // short duration can be a deliberate, informed choice on a sensor known
-  // to be reliable, and CLAUDE.md's correctness priority cuts both ways —
-  // this app can't silently trade "no false positives" for "misses were
-  // slower to fire."
-  const weakDebounce =
-    selectedInterval != null &&
-    !customDurationTooShort &&
-    (() => {
-      const seconds = getDurationSeconds(form);
-      return seconds != null && seconds < selectedInterval.seconds * 3;
-    })();
+    form.durationMode === "custom" &&
+    partsToSeconds(form.customDays, form.customHours, form.customMinutes, form.customSeconds) < MIN_DURATION_SECONDS;
 
   // Fields are typed in the user's display unit (e.g. Fahrenheit) — convert
   // to the storage/evaluation unit (always Celsius for temperature) before
@@ -492,6 +492,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
         };
     setForm({
       ...emptyForm,
+      name: rule.name ?? "",
       sensorId: rule.sensorId,
       metric: rule.metric,
       ...durationFields,
@@ -519,8 +520,8 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
       const conditionCheck = validateCondition(condition);
       if (!conditionCheck.valid) throw new Error(conditionCheck.error);
 
-      if (selectedInterval && !isDurationValid(durationSeconds, selectedInterval)) {
-        throw new Error("selected duration is too short for this sensor's reporting interval");
+      if (!isDurationValid(durationSeconds)) {
+        throw new Error(`duration must be at least ${MIN_DURATION_SECONDS} seconds`);
       }
 
       const webhook = buildWebhookTarget(form.webhook);
@@ -535,6 +536,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
       }
 
       const payload = {
+        name: form.name.trim() || null,
         sensorId: form.sensorId,
         metric: form.metric as Sensor["metrics"][number],
         condition,
@@ -597,6 +599,8 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
 
   const historyRule = rules.find((r) => r.id === historyRuleId);
   const historyDeliveries = historyRuleId ? deliveries[historyRuleId] ?? [] : [];
+  const detailsRule = rules.find((r) => r.id === detailsRuleId);
+  const detailsLastDelivery = detailsRuleId ? deliveries[detailsRuleId]?.[0] : undefined;
 
   return (
     <div className="flex flex-col gap-4">
@@ -625,6 +629,16 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
           </DialogHeader>
           <form className="flex flex-col gap-3" onSubmit={submitRule}>
             <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Name (optional)</label>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g. Freezer too warm"
+                maxLength={100}
+              />
+            </div>
+
+            <div className="flex flex-col gap-1">
               <label className="text-xs text-muted-foreground">Sensor</label>
               <select
                 className="h-9 rounded-md border border-border bg-background px-3 text-sm"
@@ -641,6 +655,27 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                   </option>
                 ))}
               </select>
+              {selectedSensor &&
+                (() => {
+                  const { badge, status } = sensorReportingStatus(selectedSensor.id);
+                  return (
+                    <div className="flex items-center gap-2">
+                      <Badge variant={badge.variant} className="text-[10px]">
+                        {badge.label}
+                      </Badge>
+                      {/* suppressHydrationWarning — "X ago" is derived from
+                          Date.now() at render time; see dashboard-client.tsx's
+                          note on the same pattern. */}
+                      <span
+                        className="text-xs text-muted-foreground"
+                        title={status?.lastSeenAt ? absoluteTimeLabel(status.lastSeenAt) : undefined}
+                        suppressHydrationWarning
+                      >
+                        last seen {preciseAgoLabel(status?.lastSeenAt ?? null)}
+                      </span>
+                    </div>
+                  );
+                })()}
             </div>
 
             <div className="flex flex-col gap-1">
@@ -836,18 +871,14 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                   <option value="" disabled>
                     Select a duration
                   </option>
-                  {DURATION_PRESETS.map((p) => {
-                    const tooShort = selectedInterval ? p.seconds < selectedInterval.seconds : false;
-                    return (
-                      <option key={p.seconds} value={p.seconds} disabled={tooShort}>
-                        {p.label}
-                        {tooShort ? " (too short for this sensor)" : ""}
-                      </option>
-                    );
-                  })}
+                  {DURATION_PRESETS.map((p) => (
+                    <option key={p.seconds} value={p.seconds}>
+                      {p.label}
+                    </option>
+                  ))}
                 </select>
               ) : (
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-muted-foreground">Days</label>
                     <Input
@@ -875,37 +906,17 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                       onChange={(e) => setForm({ ...form, customMinutes: e.target.value })}
                     />
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-muted-foreground">Seconds</label>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={form.customSeconds}
-                      onChange={(e) => setForm({ ...form, customSeconds: e.target.value })}
-                    />
-                  </div>
                 </div>
               )}
 
-              {selectedInterval && (
-                <p className={`text-xs ${customDurationTooShort ? "text-red-600" : "text-muted-foreground"}`}>
-                  This sensor's effective reporting interval is ~{selectedInterval.seconds}s (
-                  {selectedInterval.source.replace("-", " ")}) — durations shorter than that{" "}
-                  {form.durationMode === "preset" ? "are disabled above" : "will be rejected"}.
-                </p>
-              )}
-              {weakDebounce && (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
-                  This duration is under 3x the reporting interval, so a single late or flaky reading — including a
-                  missed check-in from the sensor itself, not just our poll — can be enough to fire it. Consider at
-                  least 3x (~{selectedInterval!.seconds * 3}s) for a sturdier debounce — not required, just a
-                  stronger guarantee against a one-sample false positive.
-                </p>
+              {customDurationTooShort && (
+                <p className="text-xs text-red-600">Duration must be at least {MIN_DURATION_SECONDS} seconds (1 minute).</p>
               )}
               <p className="text-xs text-muted-foreground">
-                Note: this is an observed average, not a guarantee — an occasional slower-than-usual reading can
-                still make a rule fire spuriously if its duration sits right at that floor. If a rule fires
-                without a real sustained cause, increase its duration rather than treating it as a bug.
+                1 minute is the floor — nothing here can poll or confirm a change faster than that. Beyond it, base
+                the duration on how often this sensor actually reports: check its real "update frequency" in the
+                UniFi Protect app and set this to at least 2x that value, ideally 3x, so one missed or delayed
+                report can't bounce the rule.
               </p>
             </div>
 
@@ -964,7 +975,8 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                       <Badge variant={deliveryBadgeVariant(d)}>{d.ok ? "ok" : "failed"}</Badge>
                       {d.status != null && <span className="text-xs text-muted-foreground">HTTP {d.status}</span>}
                     </div>
-                    <span className="text-xs text-muted-foreground" title={absoluteTimeLabel(d.dispatchedAt)}>
+                    {/* suppressHydrationWarning — see dashboard-client.tsx's note on this pattern */}
+                    <span className="text-xs text-muted-foreground" title={absoluteTimeLabel(d.dispatchedAt)} suppressHydrationWarning>
                       {preciseAgoLabel(d.dispatchedAt)}
                     </span>
                   </div>
@@ -980,6 +992,144 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                 </div>
               ))}
             </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={detailsRuleId != null} onOpenChange={(next) => !next && setDetailsRuleId(null)}>
+        <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+          {detailsRule && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{detailsRule.name || sensorName(detailsRule.sensorId)}</DialogTitle>
+              </DialogHeader>
+              <div className="flex flex-col gap-4 text-sm">
+                <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground">Sensor</span>
+                    <span>{sensorName(detailsRule.sensorId)}</span>
+                  </div>
+                  {(() => {
+                    const { badge, status } = sensorReportingStatus(detailsRule.sensorId);
+                    return (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">Sensor last seen</span>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={badge.variant} className="text-[10px]">
+                            {badge.label}
+                          </Badge>
+                          {/* suppressHydrationWarning — see the sensor-picker status blurb above */}
+                          <span
+                            className="text-xs text-muted-foreground"
+                            title={status?.lastSeenAt ? absoluteTimeLabel(status.lastSeenAt) : undefined}
+                            suppressHydrationWarning
+                          >
+                            {preciseAgoLabel(status?.lastSeenAt ?? null)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  <p className="text-muted-foreground">
+                    {ruleDescription(detailsRule, sensorName(detailsRule.sensorId), temperatureUnit)}
+                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground">Status</span>
+                    <Badge variant={detailsRule.enabled ? "outline" : "idle"}>
+                      {detailsRule.enabled ? "enabled" : "disabled"}
+                    </Badge>
+                  </div>
+                </div>
+
+                {canEdit && (
+                  <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                    <span className="text-xs text-muted-foreground">Last used</span>
+                    {detailsLastDelivery ? (
+                      <button
+                        type="button"
+                        className="flex w-fit items-center gap-2 underline decoration-dotted underline-offset-2 hover:text-foreground"
+                        onClick={() => {
+                          setHistoryRuleId(detailsRuleId);
+                          setDetailsRuleId(null);
+                        }}
+                      >
+                        {/* suppressHydrationWarning — see dashboard-client.tsx's note on this pattern */}
+                        <Badge variant={deliveryBadgeVariant(detailsLastDelivery)} suppressHydrationWarning>
+                          {preciseAgoLabel(detailsLastDelivery.dispatchedAt)}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {absoluteTimeLabel(detailsLastDelivery.dispatchedAt)} · view history
+                        </span>
+                      </button>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">never</span>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                  <span className="text-xs text-muted-foreground">Webhook (fired)</span>
+                  {detailsRule.webhook.kind === "console" ? (
+                    <span className="text-xs text-muted-foreground">
+                      {consoleWebhookLabel(detailsRule.webhook, consoles)}
+                    </span>
+                  ) : (
+                    <span className="break-all font-mono text-xs text-muted-foreground">{detailsRule.webhook.url}</span>
+                  )}
+                </div>
+
+                {detailsRule.resolvedWebhook && (
+                  <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                    <span className="text-xs text-muted-foreground">Webhook (resolved)</span>
+                    {detailsRule.resolvedWebhook.kind === "console" ? (
+                      <span className="text-xs text-muted-foreground">
+                        {consoleWebhookLabel(detailsRule.resolvedWebhook, consoles)}
+                      </span>
+                    ) : (
+                      <span className="break-all font-mono text-xs text-muted-foreground">
+                        {detailsRule.resolvedWebhook.url}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {canEdit && (
+                  <div className="flex flex-wrap justify-end gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        openEditDialog(detailsRule);
+                        setDetailsRuleId(null);
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={testingId === detailsRule.id}
+                      onClick={() => runTest(detailsRule.id)}
+                    >
+                      {testingId === detailsRule.id ? "Testing…" : "Test"}
+                    </Button>
+                    <Button variant="warning" size="sm" onClick={() => toggleEnabled(detailsRule)}>
+                      {detailsRule.enabled ? "Disable" : "Enable"}
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => {
+                        deleteRule(detailsRule.id);
+                        setDetailsRuleId(null);
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </DialogContent>
       </Dialog>
@@ -1004,86 +1154,41 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead>Name</TableHead>
               <TableHead>Sensor</TableHead>
-              <TableHead>Metric</TableHead>
-              <TableHead>Condition</TableHead>
-              <TableHead>Duration</TableHead>
+              <TableHead>Description</TableHead>
               <TableHead>Status</TableHead>
-              {canEdit && <TableHead>Last used</TableHead>}
-              <TableHead>Webhook</TableHead>
-              {canEdit && <TableHead />}
+              {canEdit && <TableHead className="w-24">Last used</TableHead>}
+              <TableHead />
             </TableRow>
           </TableHeader>
           <TableBody>
             {rules.map((rule) => {
               const lastDelivery = deliveries[rule.id]?.[0];
+              const label = sensorName(rule.sensorId);
               return (
                 <TableRow key={rule.id}>
-                  <TableCell>{sensorName(rule.sensorId)}</TableCell>
-                  <TableCell>{rule.metric}</TableCell>
-                  <TableCell>
-                    {conditionSummary(
-                      toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
-                      metricUnitSuffix(rule.metric, temperatureUnit)
-                    )}
-                  </TableCell>
-                  <TableCell>{formatDuration(rule.durationSeconds)}</TableCell>
+                  <TableCell className="font-medium">{rule.name || <span className="text-muted-foreground">—</span>}</TableCell>
+                  <TableCell>{label}</TableCell>
+                  <TableCell className="text-muted-foreground">{ruleDescription(rule, label, temperatureUnit)}</TableCell>
                   <TableCell>
                     <Badge variant={rule.enabled ? "outline" : "idle"}>{rule.enabled ? "enabled" : "disabled"}</Badge>
                   </TableCell>
                   {canEdit && (
-                    <TableCell>
-                      {lastDelivery ? (
-                        <button
-                          type="button"
-                          className="underline decoration-dotted underline-offset-2 hover:text-foreground"
-                          onClick={() => setHistoryRuleId(rule.id)}
-                          title={absoluteTimeLabel(lastDelivery.dispatchedAt)}
-                        >
-                          <Badge variant={deliveryBadgeVariant(lastDelivery)}>
-                            {preciseAgoLabel(lastDelivery.dispatchedAt)}
-                          </Badge>
-                        </button>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">never</span>
-                      )}
+                    // suppressHydrationWarning — see dashboard-client.tsx's note on this pattern
+                    <TableCell
+                      className="w-24 text-xs text-muted-foreground"
+                      title={lastDelivery ? absoluteTimeLabel(lastDelivery.dispatchedAt) : undefined}
+                      suppressHydrationWarning
+                    >
+                      {coarseAgoLabel(lastDelivery?.dispatchedAt ?? null)}
                     </TableCell>
                   )}
                   <TableCell>
-                    {rule.webhook.kind === "console" ? (
-                      <span className="text-xs text-muted-foreground">{consoleWebhookLabel(rule.webhook, consoles)}</span>
-                    ) : (
-                      <span
-                        className="block max-w-[220px] truncate font-mono text-xs text-muted-foreground"
-                        title={rule.webhook.url}
-                      >
-                        {rule.webhook.url}
-                      </span>
-                    )}
+                    <Button variant="outline" size="sm" onClick={() => setDetailsRuleId(rule.id)}>
+                      Details
+                    </Button>
                   </TableCell>
-                  {canEdit && (
-                    <TableCell>
-                      <div className="flex flex-nowrap justify-end gap-1">
-                        <Button variant="outline" size="sm" onClick={() => openEditDialog(rule)}>
-                          Edit
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={testingId === rule.id}
-                          onClick={() => runTest(rule.id)}
-                        >
-                          {testingId === rule.id ? "Testing…" : "Test"}
-                        </Button>
-                        <Button variant="warning" size="sm" onClick={() => toggleEnabled(rule)}>
-                          {rule.enabled ? "Disable" : "Enable"}
-                        </Button>
-                        <Button variant="destructive" size="sm" onClick={() => deleteRule(rule.id)}>
-                          Delete
-                        </Button>
-                      </div>
-                    </TableCell>
-                  )}
                 </TableRow>
               );
             })}

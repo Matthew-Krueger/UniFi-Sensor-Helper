@@ -30,6 +30,10 @@ export const passwordSchema = z
 // username/password are — an unbounded string in a request body is a
 // standing DoS/storage-bloat risk regardless of what the field is for.
 export const consoleNameSchema = z.string().min(1).max(100, "Name must be 100 characters or fewer");
+// Rule (Latch) name — optional, so min(1) isn't enforced here; callers
+// treat an empty string the same as null (see apps/web/app/api/latches
+// routes) and fall back to an auto-generated description in the UI.
+export const latchNameSchema = z.string().max(100, "Name must be 100 characters or fewer");
 export const consoleHostSchema = z.string().min(1).max(255, "Host must be 255 characters or fewer");
 export const consoleApiKeySchema = z.string().min(1).max(512, "API key must be 512 characters or fewer");
 // Opaque, operator-chosen ID for a Protect Alarm Manager "trigger via

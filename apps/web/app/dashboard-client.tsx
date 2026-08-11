@@ -97,7 +97,16 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
                   <CardTitle className="text-base">{sensorName(rule.sensorId)}</CardTitle>
                   <Badge variant={label as "idle" | "armed" | "fired"}>{label}</Badge>
                 </div>
-                <CardDescription title={sinceTimestamp ? absoluteTimeLabel(sinceTimestamp) : undefined}>
+                {/* suppressHydrationWarning: "X ago" is computed from Date.now()
+                    at render time, so the server's render and the client's
+                    first-paint render (a moment later, over the network) will
+                    almost always differ by a second or two — that's expected,
+                    not a bug, and this is the officially recommended way to
+                    silence the resulting warning without discarding/
+                    regenerating the whole subtree (see Next.js's hydration
+                    error docs). useNowTick still re-renders this with the
+                    live value every second after mount. */}
+                <CardDescription title={sinceTimestamp ? absoluteTimeLabel(sinceTimestamp) : undefined} suppressHydrationWarning>
                   {rule.metric}{" "}
                   {conditionSummary(
                     toDisplayCondition(rule.condition, rule.metric, temperatureUnit),

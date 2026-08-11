@@ -9,6 +9,7 @@ import { dispatchWebhook, type ResolvedWebhookTarget } from "../src/webhookDispa
 // what URL gets hit.
 const latch: Latch = {
   id: "freezer-temp",
+  name: null,
   sensorId: "sensor-1",
   metric: "temperature",
   condition: { type: "above", threshold: 55, hysteresis: { mode: "manual", clearThreshold: 38 } },

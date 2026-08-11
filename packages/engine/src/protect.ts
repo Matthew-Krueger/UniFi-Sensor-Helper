@@ -21,6 +21,23 @@ export interface RawSensor {
   leakSettings?: { isInternalEnabled: boolean; isExternalEnabled: boolean };
   leakDetectedAt?: number | null;
   externalLeakDetectedAt?: number | null;
+  // Top-level `batteryStatus` is documented as deprecated in favor of this
+  // — also the only battery field actually observed on the websocket's
+  // "update" deltas (see API_NOTES.md's follow-up finding), so this is the
+  // one path used both from GET /v1/sensors and (in principle) from a
+  // websocket touch.
+  wirelessConnectionState?: { batteryStatus?: { percentage: number | null; isLow: boolean } | null } | null;
+}
+
+export interface RawBattery {
+  percentage: number | null;
+  isLow: boolean;
+}
+
+export function rawSensorBattery(raw: RawSensor): RawBattery | null {
+  const battery = raw.wirelessConnectionState?.batteryStatus;
+  if (!battery) return null;
+  return { percentage: battery.percentage, isLow: battery.isLow };
 }
 
 export interface ProtectConfig {
@@ -194,9 +211,35 @@ export interface DeviceSubscription {
 // Reconnects with exponential backoff on close/error rather than relying on
 // an external scheduler — the engine is a persistent process, per CLAUDE.md
 // "don't reach for cron ... those live inside the engine as timers".
+// Verbose per-message tracing. On by default outside production (dev,
+// test, a local `bun run dev`) so this is visible without remembering a
+// flag; PROTECT_DEBUG=1 forces it on in production too, for diagnosing a
+// live connectivity issue without redeploying. Every real websocket
+// message used to be logged unconditionally regardless of environment on
+// the theory that volume would stay low (minutes-scale report cadence);
+// in practice bursts of "update"/no-metric-bearing-fields messages made
+// the production server log mostly noise, hence gating it off there by
+// default.
+const DEBUG = process.env.PROTECT_DEBUG === "1" || process.env.NODE_ENV !== "production";
+
+// Full raw wire payload per message — off even under DEBUG, since it's a
+// lot more volume than the one-line summary and only useful for a
+// specific live experiment (e.g. "change a value on the physical sensor
+// right now and watch exactly what Protect actually sends"). Separate
+// opt-in flag so the normal dev log stays at the one-line summary.
+const LOG_RAW = process.env.PROTECT_LOG_RAW === "1";
+
 export function subscribeDevices(
   config: ProtectConfig,
   onReading: (reading: Reading) => void,
+  // Fired for every sensor id in an add/update message, metric-bearing or
+  // not — this is the real "Protect just heard from this device" signal,
+  // as opposed to onReading which only fires when the delta actually
+  // carried a value change. singleton.ts uses this to measure each
+  // sensor's true check-in cadence (untainted by our own poll timing) and
+  // to trigger a debounced active pull — see its recordSensorCheckin/
+  // scheduleActivePull.
+  onSensorTouch: (sensorId: string, timestamp: number) => void,
   onStatusChange?: (status: "connected" | "disconnected") => void
 ): DeviceSubscription {
   let closed = false;
@@ -222,26 +265,33 @@ export function subscribeDevices(
       // guaranteed to exist per the schema for "add"/"update"; anything
       // else (a keepalive, a shape we haven't seen) threw an uncaught
       // TypeError here before, silently, with zero visibility into what
-      // actually arrived. Every message is logged (type + modelKey + ids)
-      // — this is deliberately not gated behind a debug flag: it's the
-      // only way to answer "are we actually being fed live data by
-      // Protect" from the server log, and given the real report cadence
-      // (minutes, not seconds — see API_NOTES.md), volume is a non-issue.
+      // actually arrived.
       try {
         const msg: DeviceEventMessage = JSON.parse(ev.data as string);
         const ids = msg.item ? (Array.isArray(msg.item.id) ? msg.item.id : [msg.item.id]) : [];
-        console.log(`[protect] ws message: type=${msg.type} modelKey=${msg.item?.modelKey} ids=${ids.join(",")}`);
+        if (DEBUG) {
+          console.log(`[protect] ws message: type=${msg.type} modelKey=${msg.item?.modelKey} ids=${ids.join(",")}`);
+        }
+        if (LOG_RAW) {
+          console.log(`[protect] raw message:\n${JSON.stringify(msg, null, 2)}`);
+        }
 
         if (msg.type !== "update" && msg.type !== "add") return;
         if (msg.item?.modelKey !== "sensor") return;
 
-        const readings = readingsFromDeviceEventItem(msg.item, Date.now());
-        if (readings.length === 0) {
+        const timestamp = Date.now();
+        for (const id of ids) onSensorTouch(id, timestamp);
+
+        const readings = readingsFromDeviceEventItem(msg.item, timestamp);
+        if (readings.length === 0 && DEBUG) {
           console.log(`[protect] sensor delta had no metric-bearing fields (ids=${ids.join(",")})`);
         }
         for (const reading of readings) onReading(reading);
       } catch (err) {
         console.error("[protect] failed to process websocket message:", err);
+        if (LOG_RAW) {
+          console.error(`[protect] raw message that failed to process:\n${ev.data}`);
+        }
       }
     });
 

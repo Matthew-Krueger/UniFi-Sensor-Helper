@@ -50,6 +50,7 @@ function normalizeWebhookTarget(raw: unknown): WebhookTarget {
 function latchFromRow(row: typeof schema.latches.$inferSelect): Latch {
   return {
     id: row.id,
+    name: row.name,
     sensorId: row.sensorId,
     metric: row.metric as Latch["metric"],
     condition: JSON.parse(row.conditionJson),
@@ -162,6 +163,7 @@ export class ConfigStore {
       .insert(latches)
       .values({
         id: latch.id,
+        name: latch.name,
         sensorId: latch.sensorId,
         metric: latch.metric,
         conditionJson: JSON.stringify(latch.condition),
@@ -173,6 +175,7 @@ export class ConfigStore {
       .onConflictDoUpdate({
         target: latches.id,
         set: {
+          name: latch.name,
           sensorId: latch.sensorId,
           metric: latch.metric,
           conditionJson: JSON.stringify(latch.condition),

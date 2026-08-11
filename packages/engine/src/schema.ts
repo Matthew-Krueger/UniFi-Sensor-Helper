@@ -15,6 +15,7 @@ export const sensors = sqliteTable("sensors", {
 
 export const latches = sqliteTable("latches", {
   id: text("id").primaryKey(),
+  name: text("name"), // operator-chosen label, optional — see shared/src/types.ts's Latch.name
   sensorId: text("sensor_id").notNull(),
   metric: text("metric").notNull(),
   conditionJson: text("condition_json").notNull(), // RuleCondition JSON — see shared/src/condition.ts

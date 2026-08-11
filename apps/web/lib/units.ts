@@ -30,19 +30,26 @@ export function metricUnitSuffix(metric: Metric, temperatureUnit: "C" | "F"): st
 }
 
 // Stored (always-Celsius for temperature) -> what should be displayed.
-// Rounded to 1 decimal for Fahrenheit since the conversion introduces
-// float noise (e.g. 21°C -> 69.80000000000001°F).
+// Rounded to 1 decimal for temperature regardless of unit — not just for
+// the C->F conversion (which introduces float noise, e.g. 21°C ->
+// 69.80000000000001°F), but also for the plain Celsius passthrough, since
+// a value that was originally *entered* in Fahrenheit and converted to
+// Celsius for storage (see toStoredValue) can itself carry the same float
+// noise (e.g. 200°F -> 93.33333333333333°C stored, then displayed as-is).
 export function toDisplayValue(metric: Metric, storedValue: number, temperatureUnit: "C" | "F"): number {
-  if (metric === "temperature" && temperatureUnit === "F") {
-    return Math.round(celsiusToFahrenheit(storedValue) * 10) / 10;
-  }
-  return storedValue;
+  if (metric !== "temperature") return storedValue;
+  const value = temperatureUnit === "F" ? celsiusToFahrenheit(storedValue) : storedValue;
+  return Math.round(value * 10) / 10;
 }
 
 // What the user typed (in their display unit) -> what gets stored/evaluated.
+// Rounded to 2 decimals so a Fahrenheit entry doesn't persist as an
+// endless Celsius float (200°F would otherwise store as
+// 93.33333333333333, not 93.33) — 2 decimals keeps sub-degree precision
+// without carrying the full float tail forever.
 export function toStoredValue(metric: Metric, displayValue: number, temperatureUnit: "C" | "F"): number {
   if (metric === "temperature" && temperatureUnit === "F") {
-    return fahrenheitToCelsius(displayValue);
+    return Math.round(fahrenheitToCelsius(displayValue) * 100) / 100;
   }
   return displayValue;
 }
