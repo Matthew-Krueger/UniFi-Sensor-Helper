@@ -17,5 +17,5 @@ export async function Nav() {
     ...(actor && hasRole(actor, "admin") ? [{ href: "/users", label: "Users" }] : []),
   ];
 
-  return <NavDrawer links={links} username={actor?.username ?? null} role={actor?.role ?? null} />;
+  return <NavDrawer links={links} />;
 }

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { validatePassword, validateUsername } from "@unifi-sensor-latch/shared";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 
 // Two modes, decided by GET /api/auth's needsBootstrap flag (true only
 // while the users table is empty — SPEC.md section 3a). Sign-up is only
@@ -13,6 +14,7 @@ import { validatePassword, validateUsername } from "@unifi-sensor-latch/shared";
 // shows the sign-in form, matching the server-side check in POST /api/users.
 export default function LoginPage() {
   const router = useRouter();
+  const { setUser } = useCurrentUser();
   const [needsBootstrap, setNeedsBootstrap] = React.useState<boolean | null>(null);
   const [username, setUsername] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -38,6 +40,10 @@ export default function LoginPage() {
       });
       if (res.ok) {
         const body = await res.json();
+        // See sign-out-button.tsx's comment — otherwise the nav keeps
+        // showing "signed out" for up to the 5s poll interval even
+        // though the redirect already landed on an authenticated page.
+        setUser(body.user);
         router.push(body.user?.mustResetPassword ? "/reset-password" : "/");
       } else {
         setError("Invalid username or password");
@@ -84,6 +90,7 @@ export default function LoginPage() {
         body: JSON.stringify({ username, password }),
       });
       if (loginRes.ok) {
+        setUser((await loginRes.json()).user);
         router.push("/");
       } else {
         setError("Account created — please sign in.");

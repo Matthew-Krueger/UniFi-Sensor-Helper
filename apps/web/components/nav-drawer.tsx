@@ -9,6 +9,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { TemperatureUnitToggle } from "@/components/temperature-unit-toggle";
 import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { SignOutButton } from "@/components/sign-out-button";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 
 interface NavLink {
   href: string;
@@ -17,8 +18,6 @@ interface NavLink {
 
 interface NavDrawerProps {
   links: NavLink[];
-  username: string | null;
-  role: string | null;
 }
 
 const DESKTOP_QUERY = "(min-width: 768px)"; // matches Tailwind's md: breakpoint
@@ -41,10 +40,25 @@ const useIsomorphicLayoutEffect = typeof window !== "undefined" ? React.useLayou
 // (see the `animated` prop below). (An earlier version left it
 // closeable-but-defaulted-open on desktop; pinned is simpler and was the
 // preferred choice.)
-export function NavDrawer({ links, username, role }: NavDrawerProps) {
+export function NavDrawer({ links }: NavDrawerProps) {
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [isDesktop, setIsDesktop] = React.useState(false);
   const pathname = usePathname();
+  // Nav (the Server Component parent) resolves username/role from the
+  // session at request time and passes it down — accurate for first
+  // paint (same request-time session lookup CurrentUserProvider's
+  // initialUser is seeded from, in app/layout.tsx, so the two start in
+  // agreement). But layouts aren't re-rendered on a client-side
+  // router.push (see e350dee's note on why post-auth redirects don't
+  // call router.refresh() anymore), so those server-passed props go
+  // stale for several seconds after sign-in/sign-out until the next
+  // request happens to re-render this layout. useCurrentUser's
+  // client-side state updates immediately instead (see login/page.tsx
+  // and sign-out-button.tsx's setUser calls), so read username/role from
+  // there instead of from props.
+  const { user } = useCurrentUser();
+  const username = user?.username ?? null;
+  const role = user?.role ?? null;
 
   useIsomorphicLayoutEffect(() => {
     const mql = window.matchMedia(DESKTOP_QUERY);
