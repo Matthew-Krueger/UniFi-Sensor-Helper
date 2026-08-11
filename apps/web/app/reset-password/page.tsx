@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { validatePassword } from "@unifi-sensor-latch/shared";
 import { useCurrentUser } from "@/lib/useCurrentUser";
+import { PasswordRequirements } from "@/components/password-requirements";
 
 // Forced landing page for any account with mustResetPassword set — either
 // admin-created (generated password, never seen by the account owner
@@ -76,25 +77,23 @@ export default function ResetPasswordPage() {
               autoFocus
               required
             />
+            <Input
+              type="password"
+              placeholder="New password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+            />
             <div className="flex flex-col gap-1">
               <Input
                 type="password"
-                placeholder="New password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Confirm new password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
                 required
               />
-              <p className="text-xs text-muted-foreground">
-                8-128 characters, at least 2 of: lowercase, uppercase, numbers, symbols.
-              </p>
+              <PasswordRequirements password={newPassword} confirmPassword={confirmPassword} />
             </div>
-            <Input
-              type="password"
-              placeholder="Confirm new password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-            />
             {error && <p className="text-sm text-red-600">{error}</p>}
             <Button type="submit" disabled={saving}>
               {saving ? "Saving…" : "Set new password"}
