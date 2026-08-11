@@ -417,12 +417,15 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   }, [canEdit]);
 
   // Sensor statuses only otherwise refresh after a rule mutation (see
-  // load()) — the Details dialog's "last seen" was reading whatever
-  // statuses happened to be in state from the last such mutation, which
-  // could be stale by the time someone actually opens it to check. This
-  // is the lightweight fix: pull fresh statuses the moment the dialog
-  // opens, without the heavier full load() (which also re-fetches every
-  // rule's delivery history).
+  // load()) — the Details/create/edit dialogs' "last seen" was reading
+  // whatever statuses happened to be in state from the last such
+  // mutation, which could be stale by the time someone actually opens a
+  // dialog to check. A one-shot fetch on open isn't enough either — if
+  // the sensor reports again while the dialog just sits open (easy to do
+  // while filling out a form), the badge would keep aging via useNowTick
+  // without ever learning the real reading came in, so it settles on
+  // "delayed"/"overdue" and stays there. See the polling effect below,
+  // keyed on whether either dialog is open.
   const refreshSensorStatuses = React.useCallback(async () => {
     const res = await fetch("/api/sensors");
     if (res.ok) {
@@ -436,6 +439,16 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
     setDetailsRuleId(ruleId);
     void refreshSensorStatuses();
   }
+
+  // Keeps polling while either dialog is open, not just once on open —
+  // see refreshSensorStatuses' doc comment for why a single fetch isn't
+  // enough. Stops as soon as both close, same lightweight-poll pattern as
+  // the Consoles page.
+  React.useEffect(() => {
+    if (!open && detailsRuleId == null) return;
+    const id = setInterval(() => void refreshSensorStatuses(), 5000);
+    return () => clearInterval(id);
+  }, [open, detailsRuleId, refreshSensorStatuses]);
 
   const selectedSensor = sensors.find((s) => s.id === form.sensorId);
   const unitSuffix = form.metric ? metricUnitSuffix(form.metric as Metric, temperatureUnit) : "";
