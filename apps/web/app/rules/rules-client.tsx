@@ -582,6 +582,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
     setEditingId(null);
     setError(null);
     setOpen(true);
+    void refreshSensorStatuses();
   }
 
   function openEditDialog(rule: RuleRow) {
@@ -613,6 +614,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
     setEditingId(rule.id);
     setError(null);
     setOpen(true);
+    void refreshSensorStatuses();
   }
 
   async function submitRule(e: React.FormEvent) {
