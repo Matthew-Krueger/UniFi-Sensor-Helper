@@ -240,7 +240,7 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
 
       <p className="text-xs text-muted-foreground">
         "Last contacted" and "last seen" show when we last heard from Protect about a sensor, not when the sensor
-        itself last checked in — Protect doesn't tell us that directly, so this is the closest signal available.
+        itself last checked in.
       </p>
 
       {error && <p className="text-sm text-red-600">{error}</p>}

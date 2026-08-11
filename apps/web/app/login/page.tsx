@@ -93,7 +93,7 @@ export default function LoginPage() {
         setUser((await loginRes.json()).user);
         router.push("/");
       } else {
-        setError("Account created — please sign in.");
+        setError("Account created. Please sign in.");
         setNeedsBootstrap(false);
       }
     } finally {

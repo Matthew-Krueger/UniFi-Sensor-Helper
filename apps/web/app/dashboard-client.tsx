@@ -84,7 +84,7 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
             <CardDescription>Add sensors and rules to see live state here.</CardDescription>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
-            The engine is running independently of this page — this is only a window into its state.
+            The engine is running independently of this page. This is only a window into its state.
           </CardContent>
         </Card>
       </div>

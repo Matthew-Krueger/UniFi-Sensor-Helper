@@ -503,14 +503,14 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   let hysteresisError: string | null = null;
   if (!isLeakMetric) {
     if (form.conditionType === "above" && thresholdNum != null && clearThresholdNum != null && clearThresholdNum > thresholdNum) {
-      hysteresisError = "The disarm point can't be above the arm threshold — it would disarm the rule while the reading is still past the point that armed it.";
+      hysteresisError = "The disarm point can't be above the arm threshold, because it would disarm the rule while the reading is still past the point that armed it.";
     } else if (
       form.conditionType === "below" &&
       thresholdNum != null &&
       clearThresholdNum != null &&
       clearThresholdNum < thresholdNum
     ) {
-      hysteresisError = "The disarm point can't be below the arm threshold — it would disarm the rule while the reading is still past the point that armed it.";
+      hysteresisError = "The disarm point can't be below the arm threshold, because it would disarm the rule while the reading is still past the point that armed it.";
     } else if (form.conditionType === "between") {
       if (lowNum != null && highNum != null && !(lowNum < highNum)) {
         hysteresisError = "The low bound must be less than the high bound.";
@@ -528,9 +528,9 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
         hysteresisError = "The low bound must be less than the high bound.";
       } else if (form.hysteresisMode === "manual") {
         if (lowNum != null && clearLowNum != null && clearLowNum < lowNum) {
-          hysteresisError = "The lower disarm point must be at or above the low bound — it's the edge of the safe zone, not the armed zone.";
+          hysteresisError = "The lower disarm point must be at or above the low bound, since it's the edge of the safe zone, not the armed zone.";
         } else if (highNum != null && clearHighNum != null && clearHighNum > highNum) {
-          hysteresisError = "The upper disarm point must be at or below the high bound — it's the edge of the safe zone, not the armed zone.";
+          hysteresisError = "The upper disarm point must be at or below the high bound, since it's the edge of the safe zone, not the armed zone.";
         } else if (clearLowNum != null && clearHighNum != null && !(clearLowNum < clearHighNum)) {
           hysteresisError = "The lower disarm point must be less than the upper disarm point.";
         }
@@ -861,7 +861,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
 
             {isLeakMetric ? (
               <p className="text-xs text-muted-foreground">
-                Leak is a yes/no sensor — this rule arms as soon as a leak is detected and releases once the
+                Leak is a yes/no sensor. This rule arms as soon as a leak is detected and releases once the
                 sensor reports dry again.
               </p>
             ) : (
@@ -956,8 +956,8 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
               <div className="flex flex-col gap-2 rounded-md border border-border p-3">
                 <p className="text-xs text-muted-foreground">
                   {form.conditionType === "between"
-                    ? "Optional gap past each bound the reading must cross before disarming — blank means no gap."
-                    : "Optional gap inside each bound the reading must cross back before disarming — blank means no gap."}
+                    ? "Optional gap past each bound the reading must cross before disarming. Blank means no gap."
+                    : "Optional gap inside each bound the reading must cross back before disarming. Blank means no gap."}
                 </p>
                 <RangeNumberLine
                   mode={form.conditionType}
@@ -1074,7 +1074,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                 />
                 {isIncompleteNumber(form.clearThreshold) && <p className="text-xs text-red-600">{numberFieldError}</p>}
                 <p className="text-xs text-muted-foreground">
-                  Gap the reading must cross back past before disarming — blank means no gap.
+                  Gap the reading must cross back past before disarming. Blank means no gap.
                 </p>
                 {hysteresisError && <p className="text-xs text-red-600">{hysteresisError}</p>}
               </div>
@@ -1157,7 +1157,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                 <p className="text-xs text-red-600">Duration must be at least {MIN_DURATION_SECONDS} seconds (1 minute).</p>
               )}
               <p className="text-xs text-muted-foreground">
-                1 minute is the floor — nothing here can poll or confirm a change faster than that. Beyond it, base
+                1 minute is the floor. Nothing here can poll or confirm a change faster than that. Beyond it, base
                 the duration on how often this sensor actually reports: check its real "update frequency" in the
                 UniFi Protect app and set this to at least 2x that value, ideally 3x, so one missed or delayed
                 report can't bounce the rule.
@@ -1207,7 +1207,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
       <Dialog open={historyRuleId != null} onOpenChange={(next) => !next && setHistoryRuleId(null)}>
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Webhook history{historyRule ? ` — ${sensorName(historyRule.sensorId)}` : ""}</DialogTitle>
+            <DialogTitle>Webhook history{historyRule ? `: ${sensorName(historyRule.sensorId)}` : ""}</DialogTitle>
           </DialogHeader>
           {historyDeliveries.length === 0 ? (
             <p className="text-sm text-muted-foreground">No deliveries recorded yet.</p>
@@ -1414,7 +1414,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
               const label = sensorName(rule.sensorId);
               return (
                 <TableRow key={rule.id}>
-                  <TableCell className="font-medium">{rule.name || <span className="text-muted-foreground">—</span>}</TableCell>
+                  <TableCell className="font-medium">{rule.name || <span className="text-muted-foreground">Unnamed</span>}</TableCell>
                   <TableCell>{label}</TableCell>
                   <TableCell className="text-muted-foreground">{ruleDescription(rule, label, temperatureUnit)}</TableCell>
                   <TableCell>

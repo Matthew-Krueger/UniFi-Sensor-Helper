@@ -35,7 +35,7 @@ function GeneratedPasswordBanner({ username, password, onDismiss }: { username: 
   return (
     <div className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
       <p>
-        Generated password for <strong>{username}</strong> — shown once, not recoverable after you leave this page.
+        Generated password for <strong>{username}</strong>, shown once and not recoverable after you leave this page.
         Relay it out-of-band; they'll be forced to set a new one on first login.
       </p>
       <div className="flex items-center gap-2">
@@ -45,7 +45,7 @@ function GeneratedPasswordBanner({ username, password, onDismiss }: { username: 
         </Button>
       </div>
       <Button variant="outline" size="sm" className="w-fit" onClick={onDismiss}>
-        I've saved it — dismiss
+        I've saved it, dismiss
       </Button>
     </div>
   );
@@ -205,7 +205,7 @@ export function UsersClient({ initialUsers }: { initialUsers: User[] }) {
                 </select>
               </div>
               <p className="text-xs text-muted-foreground">
-                A random password is generated and shown once after creation — you relay it, they set their own on
+                A random password is generated and shown once after creation. You relay it, they set their own on
                 first login.
               </p>
               {error && <p className="text-sm text-red-600">{error}</p>}
@@ -270,7 +270,7 @@ export function UsersClient({ initialUsers }: { initialUsers: User[] }) {
                           variant="ghost"
                           size="sm"
                           onClick={() => invalidatePassword(u)}
-                          title="Their current password keeps working to sign in, but they're forced to set a new one immediately after — nothing changes until their next login."
+                          title="Their current password keeps working to sign in, but they're forced to set a new one immediately after. Nothing changes until their next login."
                         >
                           Force Reset on Next Login
                         </Button>
@@ -278,7 +278,7 @@ export function UsersClient({ initialUsers }: { initialUsers: User[] }) {
                           variant="ghost"
                           size="sm"
                           onClick={() => resetPassword(u)}
-                          title="Generates a brand new password right now — their old one stops working immediately."
+                          title="Generates a brand new password right now. Their old one stops working immediately."
                         >
                           Generate New Password
                         </Button>

@@ -23,7 +23,7 @@ function AppearanceCard() {
     <Card>
       <CardHeader>
         <CardTitle>Appearance</CardTitle>
-        <CardDescription>Applies to this browser — not saved to your account.</CardDescription>
+        <CardDescription>Applies to this browser, not saved to your account.</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="inline-flex gap-1 rounded-md border border-border p-1">
@@ -85,7 +85,7 @@ function UnitsCard() {
     <Card>
       <CardHeader>
         <CardTitle>Units</CardTitle>
-        <CardDescription>Display only — sensor values are always stored and evaluated in Celsius.</CardDescription>
+        <CardDescription>Display only. Sensor values are always stored and evaluated in Celsius.</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="inline-flex gap-1 rounded-md border border-border p-1">

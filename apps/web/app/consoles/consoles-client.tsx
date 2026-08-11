@@ -313,7 +313,7 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
                 placeholder="e.g. https://unifi.ui.com/proxy/consoles/<id>/protect/integration"
               />
               <p className="text-xs text-muted-foreground">
-                You almost certainly don't need this — by default the app talks to the console directly at{" "}
+                You almost certainly don't need this. By default, the app talks to the console directly at{" "}
                 <code className="font-mono">https://{host || "&lt;host&gt;"}/proxy/protect/integration</code>. Set
                 this only if you need to reach the console through something else instead, e.g. UniFi's
                 remote/cloud API base. Leave blank to use the default.
@@ -334,7 +334,7 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
               {downAlertEnabled && (
                 <>
                   <p className="text-xs text-muted-foreground">
-                    Fires once no reading has come in from this console for the chosen duration — catches a
+                    Fires once no reading has come in from this console for the chosen duration, catching a
                     connection that's silently stopped delivering, separate from the connection-state badge above.
                   </p>
                   <div className="flex flex-col gap-1">
@@ -365,7 +365,7 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
                   />
                   <p className="text-xs text-muted-foreground">
                     If this console is the one that's down, a webhook that also has to reach it won't deliver
-                    either — point this at a different console or a custom external URL, not this one.
+                    either. Point this at a different console or a custom external URL, not this one.
                   </p>
                   <div className="flex items-center gap-2">
                     <input
@@ -401,7 +401,7 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
 
       {savingMessage && (
         <div className="rounded-md border border-border bg-muted/50 px-4 py-2 text-sm text-muted-foreground">
-          {savingMessage} Saved immediately — connection status streams in below as each step completes.
+          {savingMessage} Saved immediately. Connection status streams in below as each step completes.
         </div>
       )}
 
@@ -458,7 +458,7 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
                       <>
                         after {formatDuration(c.downAlertDurationSeconds ?? 0)} silent
                         {status?.downAlertFired && (
-                          <span className="ml-1 font-medium text-red-600 dark:text-red-400">— currently firing</span>
+                          <span className="ml-1 font-medium text-red-600 dark:text-red-400">(currently firing)</span>
                         )}
                       </>
                     ) : (

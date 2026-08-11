@@ -3,6 +3,16 @@
 Read `SPEC.md` first. This file is rules for how to work on this project,
 not what to build.
 
+## Writing style
+
+- No dash or hyphen characters used as punctuation (em dash `—`, en dash
+  `–`, or a plain hyphen `-` standing in for one) in any user-facing text
+  (UI copy, error messages, toasts, labels). The project owner dislikes
+  them. Rewrite with a period, comma, or colon instead, or restructure
+  the sentence. Hyphens inside actual hyphenated words (`well-known`,
+  `8-128`) are fine; it's dashes-as-punctuation that are banned. This
+  does not apply to code comments or markdown docs.
+
 ## Non-negotiable: `.env` boundary
 
 - **Never open, read, `cat`, `grep`, or otherwise inspect the contents of
