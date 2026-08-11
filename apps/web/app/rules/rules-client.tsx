@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -368,11 +369,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   const { user: actor } = useCurrentUser();
   const canEdit = hasRole(actor, "admin");
   const temperatureUnit = actor?.temperatureUnit ?? "C";
-  const [rules, setRules] = React.useState<RuleRow[]>(initial.rules);
-  const [sensors, setSensors] = React.useState<Sensor[]>(initial.sensors);
-  const [sensorStatuses, setSensorStatuses] = React.useState<SensorStatus[]>(initial.sensorStatuses);
-  const [consoles, setConsoles] = React.useState<ProtectConsole[]>(initial.consoles);
-  const [deliveries, setDeliveries] = React.useState<Record<string, WebhookDelivery[]>>(initial.deliveries);
+  const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [historyRuleId, setHistoryRuleId] = React.useState<string | null>(null);
@@ -382,73 +379,93 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
-  const load = React.useCallback(async () => {
-    const [rulesRes, sensorsRes, consolesRes] = await Promise.all([
-      fetch("/api/latches"),
-      fetch("/api/sensors"),
-      fetch("/api/consoles"),
-    ]);
-    let loadedRules: RuleRow[] = [];
-    if (rulesRes.ok) {
-      loadedRules = (await rulesRes.json()).latches;
-      setRules(loadedRules);
-    }
-    if (sensorsRes.ok) {
-      const body = await sensorsRes.json();
-      setSensors(body.sensors);
-      setSensorStatuses(body.statuses);
-    }
-    if (consolesRes.ok) setConsoles((await consolesRes.json()).consoles);
+  const rulesQuery = useQuery({
+    queryKey: ["latches"],
+    queryFn: async () => {
+      const res = await fetch("/api/latches");
+      if (!res.ok) throw new Error("failed to load rules");
+      return (await res.json()).latches as RuleRow[];
+    },
+    initialData: initial.rules,
+  });
+  const rules = rulesQuery.data;
 
-    // Delivery history is admin-only server-side (CLAUDE.md) — don't even
-    // attempt the fetch for a read-only "user" session.
-    if (canEdit && loadedRules.length > 0) {
+  // Sensor statuses only otherwise refresh after a rule mutation — the
+  // Details/create/edit dialogs' "last seen" was reading whatever
+  // statuses happened to be in state from the last such mutation, which
+  // could be stale by the time someone actually opens a dialog to check.
+  // A one-shot fetch on open isn't enough either — if the sensor reports
+  // again while the dialog just sits open (easy to do while filling out
+  // a form), the badge would keep aging via useNowTick without ever
+  // learning the real reading came in, so it settles on
+  // "delayed"/"overdue" and stays there. refetchInterval below keeps
+  // polling while either dialog is open, not just once on open, and
+  // stops as soon as both close — same lightweight-poll pattern as the
+  // Consoles page.
+  const dialogOpen = open || detailsRuleId != null;
+  const sensorsQuery = useQuery({
+    queryKey: ["sensors"],
+    queryFn: async () => {
+      const res = await fetch("/api/sensors");
+      if (!res.ok) throw new Error("failed to load sensors");
+      return (await res.json()) as { sensors: Sensor[]; statuses: SensorStatus[] };
+    },
+    initialData: { sensors: initial.sensors, statuses: initial.sensorStatuses },
+    refetchInterval: dialogOpen ? 5000 : false,
+  });
+  const sensors = sensorsQuery.data.sensors;
+  const sensorStatuses = sensorsQuery.data.statuses;
+  const refreshSensorStatuses = React.useCallback(
+    () => queryClient.invalidateQueries({ queryKey: ["sensors"] }),
+    [queryClient]
+  );
+
+  const consolesQuery = useQuery({
+    queryKey: ["consoles"],
+    queryFn: async () => {
+      const res = await fetch("/api/consoles");
+      if (!res.ok) throw new Error("failed to load consoles");
+      return (await res.json()).consoles as ProtectConsole[];
+    },
+    initialData: initial.consoles,
+  });
+  const consoles = consolesQuery.data;
+
+  // Delivery history is admin-only server-side (CLAUDE.md) — don't even
+  // attempt the fetch for a read-only "user" session.
+  const deliveriesQuery = useQuery({
+    queryKey: ["deliveries", rules.map((r) => r.id).join(",")],
+    queryFn: async () => {
       const results = await Promise.all(
-        loadedRules.map(async (rule) => {
+        rules.map(async (rule) => {
           const res = await fetch(`/api/latches/${rule.id}/deliveries`);
           if (!res.ok) return [rule.id, []] as const;
           const body = await res.json();
           return [rule.id, body.deliveries as WebhookDelivery[]] as const;
         })
       );
-      setDeliveries(Object.fromEntries(results));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canEdit]);
+      return Object.fromEntries(results) as Record<string, WebhookDelivery[]>;
+    },
+    initialData: initial.deliveries,
+    enabled: canEdit && rules.length > 0,
+  });
+  const deliveries = deliveriesQuery.data;
 
-  // Sensor statuses only otherwise refresh after a rule mutation (see
-  // load()) — the Details/create/edit dialogs' "last seen" was reading
-  // whatever statuses happened to be in state from the last such
-  // mutation, which could be stale by the time someone actually opens a
-  // dialog to check. A one-shot fetch on open isn't enough either — if
-  // the sensor reports again while the dialog just sits open (easy to do
-  // while filling out a form), the badge would keep aging via useNowTick
-  // without ever learning the real reading came in, so it settles on
-  // "delayed"/"overdue" and stays there. See the polling effect below,
-  // keyed on whether either dialog is open.
-  const refreshSensorStatuses = React.useCallback(async () => {
-    const res = await fetch("/api/sensors");
-    if (res.ok) {
-      const body = await res.json();
-      setSensors(body.sensors);
-      setSensorStatuses(body.statuses);
-    }
-  }, []);
+  const load = React.useCallback(
+    () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["latches"] }),
+        queryClient.invalidateQueries({ queryKey: ["sensors"] }),
+        queryClient.invalidateQueries({ queryKey: ["consoles"] }),
+        queryClient.invalidateQueries({ queryKey: ["deliveries"] }),
+      ]),
+    [queryClient]
+  );
 
   function openDetailsDialog(ruleId: string) {
     setDetailsRuleId(ruleId);
     void refreshSensorStatuses();
   }
-
-  // Keeps polling while either dialog is open, not just once on open —
-  // see refreshSensorStatuses' doc comment for why a single fetch isn't
-  // enough. Stops as soon as both close, same lightweight-poll pattern as
-  // the Consoles page.
-  React.useEffect(() => {
-    if (!open && detailsRuleId == null) return;
-    const id = setInterval(() => void refreshSensorStatuses(), 5000);
-    return () => clearInterval(id);
-  }, [open, detailsRuleId, refreshSensorStatuses]);
 
   const selectedSensor = sensors.find((s) => s.id === form.sensorId);
   const unitSuffix = form.metric ? metricUnitSuffix(form.metric as Metric, temperatureUnit) : "";

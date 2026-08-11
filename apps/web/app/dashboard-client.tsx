@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Latch, LatchStateRecord, Sensor } from "@unifi-sensor-latch/shared";
@@ -21,40 +22,37 @@ export interface DashboardInitialData {
   states: LatchStateRecord[];
 }
 
-// Seeded from a server-side fetch (see page.tsx) — first paint already
-// has real rule cards/state instead of the "No rules configured yet"
-// empty state popping in a moment later once the client's own fetch
-// resolves. The 5s poll still runs exactly as before to keep it live.
+async function fetchJson<T>(url: string, key: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url} failed`);
+  return (await res.json())[key];
+}
+
+// Seeded from a server-side fetch (see page.tsx) via `initialData` — first
+// paint already has real rule cards/state instead of the "No rules
+// configured yet" empty state popping in a moment later once the client's
+// own fetch resolves. refetchInterval keeps it live from there.
 function useLiveState(initial: DashboardInitialData) {
-  const [rules, setRules] = React.useState<Latch[]>(initial.rules);
-  const [sensors, setSensors] = React.useState<Sensor[]>(initial.sensors);
-  const [states, setStates] = React.useState<LatchStateRecord[]>(initial.states);
+  const rules = useQuery({
+    queryKey: ["latches"],
+    queryFn: () => fetchJson<Latch[]>("/api/latches", "latches"),
+    initialData: initial.rules,
+    refetchInterval: POLL_MS,
+  });
+  const sensors = useQuery({
+    queryKey: ["sensors"],
+    queryFn: () => fetchJson<Sensor[]>("/api/sensors", "sensors"),
+    initialData: initial.sensors,
+    refetchInterval: POLL_MS,
+  });
+  const states = useQuery({
+    queryKey: ["state"],
+    queryFn: () => fetchJson<LatchStateRecord[]>("/api/state", "states"),
+    initialData: initial.states,
+    refetchInterval: POLL_MS,
+  });
 
-  React.useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      const [rulesRes, sensorsRes, stateRes] = await Promise.all([
-        fetch("/api/latches"),
-        fetch("/api/sensors"),
-        fetch("/api/state"),
-      ]);
-      if (cancelled) return;
-      if (rulesRes.ok) setRules((await rulesRes.json()).latches);
-      if (sensorsRes.ok) setSensors((await sensorsRes.json()).sensors);
-      if (stateRes.ok) setStates((await stateRes.json()).states);
-    }
-
-    // Initial render already has server-fetched data — the interval below
-    // just keeps it fresh going forward.
-    const id = setInterval(poll, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
-
-  return { rules, sensors, states };
+  return { rules: rules.data, sensors: sensors.data, states: states.data };
 }
 
 export function DashboardClient({ initial }: { initial: DashboardInitialData }) {

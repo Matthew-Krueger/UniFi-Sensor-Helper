@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -96,10 +97,32 @@ export interface ConsolesInitialData {
 export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
   useNowTick(); // keeps "last contacted" ticking live, second-by-second
   const { user: actor } = useCurrentUser();
+  const queryClient = useQueryClient();
   const canManage = hasRole(actor, "admin");
 
-  const [consoles, setConsoles] = React.useState<ProtectConsole[]>(initial.consoles);
-  const [statuses, setStatuses] = React.useState<ConsoleStatus[]>(initial.statuses);
+  // See usePausedWhileSelectFocused's doc comment — avoids a real Firefox
+  // crash when a poll-driven re-render mutates a <select> while its
+  // dropdown popup is open (this page's per-console interval dropdown).
+  const paused = usePausedWhileSelectFocused();
+
+  const consolesQuery = useQuery({
+    queryKey: ["consoles"],
+    queryFn: async () => {
+      const res = await fetch("/api/consoles");
+      if (!res.ok) throw new Error("failed to load consoles");
+      return (await res.json()) as { consoles: ProtectConsole[]; statuses: ConsoleStatus[] };
+    },
+    initialData: { consoles: initial.consoles, statuses: initial.statuses },
+    refetchInterval: (query) => {
+      if (paused) return false;
+      const anyActive = query.state.data?.statuses.some((s) => s.connectionState === "connecting") ?? false;
+      return anyActive ? POLL_MS_ACTIVE : POLL_MS_IDLE;
+    },
+  });
+  const consoles = consolesQuery.data.consoles;
+  const statuses = consolesQuery.data.statuses;
+  const load = React.useCallback(() => queryClient.invalidateQueries({ queryKey: ["consoles"] }), [queryClient]);
+
   const [open, setOpen] = React.useState(false);
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [name, setName] = React.useState("");
@@ -115,38 +138,6 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [savingMessage, setSavingMessage] = React.useState<string | null>(null);
-
-  const load = React.useCallback(async () => {
-    const res = await fetch("/api/consoles");
-    if (res.ok) {
-      const body = await res.json();
-      setConsoles(body.consoles);
-      setStatuses(body.statuses);
-    }
-  }, []);
-
-  const anyActive = statuses.some((s) => s.connectionState === "connecting");
-
-  // See usePausedWhileSelectFocused's doc comment — avoids a real Firefox
-  // crash when a poll-driven re-render mutates a <select> while its
-  // dropdown popup is open (this page's per-console interval dropdown).
-  const paused = usePausedWhileSelectFocused();
-  const pausedRef = React.useRef(paused);
-  React.useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
-
-  React.useEffect(() => {
-    // Initial render already has server-fetched data — the interval below
-    // just keeps it fresh going forward.
-    const id = setInterval(
-      () => {
-        if (!pausedRef.current) load();
-      },
-      anyActive ? POLL_MS_ACTIVE : POLL_MS_IDLE
-    );
-    return () => clearInterval(id);
-  }, [load, anyActive]);
 
   function resetForm() {
     setName("");

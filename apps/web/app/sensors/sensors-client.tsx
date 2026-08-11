@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Battery, BatteryWarning, Droplets, Sun, Thermometer, TriangleAlert, Gauge } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -130,49 +131,42 @@ export interface SensorsInitialData {
 export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
   useNowTick(); // keeps "last contacted"/"refreshed" ticking live, second-by-second
   const { user: actor } = useCurrentUser();
+  const queryClient = useQueryClient();
   const temperatureUnit = actor?.temperatureUnit ?? "C";
   const canDiscover = hasRole(actor, "admin");
-  const [sensors, setSensors] = React.useState<Sensor[]>(initial.sensors);
-  const [statuses, setStatuses] = React.useState<SensorStatus[]>(initial.statuses);
-  const [consoles, setConsoles] = React.useState<ProtectConsole[]>(initial.consoles);
-  const [consoleStatuses, setConsoleStatuses] = React.useState<ConsoleStatus[]>(initial.consoleStatuses);
-  const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = React.useState<number | null>(null);
 
-  const load = React.useCallback(async () => {
-    const [sensorsRes, consolesRes] = await Promise.all([fetch("/api/sensors"), fetch("/api/consoles")]);
-    if (sensorsRes.ok) {
-      const body = await sensorsRes.json();
-      setSensors(body.sensors);
-      setStatuses(body.statuses);
-    }
-    if (consolesRes.ok) {
-      const body = await consolesRes.json();
-      setConsoles(body.consoles);
-      setConsoleStatuses(body.statuses);
-    }
-  }, []);
-
   // See usePausedWhileSelectFocused's doc comment — avoids a real Firefox
   // crash when a poll-driven re-render mutates a <select> while its
-  // dropdown popup is open. Read via a ref so focus/blur doesn't tear
-  // down and recreate the interval on every keystroke.
+  // dropdown popup is open.
   const paused = usePausedWhileSelectFocused();
-  const pausedRef = React.useRef(paused);
-  React.useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
 
-  React.useEffect(() => {
-    // Initial render already has server-fetched data — only the recurring
-    // poll needs to run here, not an immediate re-fetch of what we just
-    // rendered.
-    const id = setInterval(() => {
-      if (!pausedRef.current) load();
-    }, POLL_MS);
-    return () => clearInterval(id);
-  }, [load]);
+  const sensorsQuery = useQuery({
+    queryKey: ["sensors"],
+    queryFn: async () => {
+      const res = await fetch("/api/sensors");
+      if (!res.ok) throw new Error("failed to load sensors");
+      return (await res.json()) as { sensors: Sensor[]; statuses: SensorStatus[] };
+    },
+    initialData: { sensors: initial.sensors, statuses: initial.statuses },
+    refetchInterval: paused ? false : POLL_MS,
+  });
+  const consolesQuery = useQuery({
+    queryKey: ["consoles"],
+    queryFn: async () => {
+      const res = await fetch("/api/consoles");
+      if (!res.ok) throw new Error("failed to load consoles");
+      return (await res.json()) as { consoles: ProtectConsole[]; statuses: ConsoleStatus[] };
+    },
+    initialData: { consoles: initial.consoles, statuses: initial.consoleStatuses },
+    refetchInterval: paused ? false : POLL_MS,
+  });
+
+  const sensors = sensorsQuery.data.sensors;
+  const statuses = sensorsQuery.data.statuses;
+  const consoles = consolesQuery.data.consoles;
+  const consoleStatuses = consolesQuery.data.statuses;
 
   // "Refresh" is a manual, on-demand refetch: it re-runs discovery
   // (picks up any newly added/removed physical sensors — see
@@ -185,24 +179,31 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
   // nothing actually changed (same sensors, same values) — otherwise a
   // no-op-looking success is indistinguishable from the button silently
   // doing nothing.
-  async function refresh() {
-    setLoading(true);
-    setError(null);
-    try {
+  const refreshMutation = useMutation({
+    mutationFn: async () => {
       const res = await fetch("/api/sensors/discover", { method: "POST" });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "discovery failed");
-      if (body.errors?.length) setError(body.errors.join("; "));
-      await load();
+      return body.errors as string[] | undefined;
+    },
+    onSuccess: async (discoverErrors) => {
+      setError(discoverErrors?.length ? discoverErrors.join("; ") : null);
+      await queryClient.invalidateQueries({ queryKey: ["sensors"] });
       setLastRefreshedAt(Date.now());
-    } catch (err) {
+    },
+    onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[sensors] refresh failed:", err);
       setError(message);
-    } finally {
-      setLoading(false);
-    }
+    },
+  });
+
+  function refresh() {
+    setError(null);
+    refreshMutation.mutate();
   }
+
+  const loading = refreshMutation.isPending;
 
   return (
     <div className="flex flex-col gap-4">

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -56,20 +57,46 @@ function GeneratedPasswordBanner({ username, password, onDismiss }: { username: 
 // role/data are still loading client-side.
 export function UsersClient({ initialUsers }: { initialUsers: User[] }) {
   const { user: actor } = useCurrentUser();
-  const [users, setUsers] = React.useState<User[]>(initialUsers);
+  const queryClient = useQueryClient();
+  const { data: users = initialUsers } = useQuery({
+    queryKey: ["users"],
+    queryFn: async () => {
+      const res = await fetch("/api/users");
+      if (!res.ok) throw new Error("failed to load users");
+      return (await res.json()).users as User[];
+    },
+    initialData: initialUsers,
+  });
   const [open, setOpen] = React.useState(false);
   const [username, setUsername] = React.useState("");
   const [role, setRole] = React.useState<Role>("user");
   const [error, setError] = React.useState<string | null>(null);
-  const [saving, setSaving] = React.useState(false);
   const [generated, setGenerated] = React.useState<{ username: string; password: string } | null>(null);
 
-  const load = React.useCallback(async () => {
-    const res = await fetch("/api/users");
-    if (res.ok) setUsers((await res.json()).users);
-  }, []);
+  const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: ["users"] });
 
-  async function createUser(e: React.FormEvent) {
+  const createUserMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, role }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "failed to create account");
+      return body.generatedPassword as string;
+    },
+    onSuccess: (generatedPassword) => {
+      setGenerated({ username, password: generatedPassword });
+      setUsername("");
+      setRole("user");
+      setOpen(false);
+      void invalidateUsers();
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : String(err)),
+  });
+
+  function createUser(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
@@ -79,25 +106,7 @@ export function UsersClient({ initialUsers }: { initialUsers: User[] }) {
       return;
     }
 
-    setSaving(true);
-    try {
-      const res = await fetch("/api/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, role }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "failed to create account");
-      setGenerated({ username, password: body.generatedPassword });
-      setUsername("");
-      setRole("user");
-      setOpen(false);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
+    createUserMutation.mutate();
   }
 
   async function deleteUser(id: string) {
@@ -111,7 +120,7 @@ export function UsersClient({ initialUsers }: { initialUsers: User[] }) {
       setError(body.error ?? "failed to delete account");
       return;
     }
-    await load();
+    await invalidateUsers();
   }
 
   async function changeRole(id: string, newRole: Role) {
@@ -125,7 +134,7 @@ export function UsersClient({ initialUsers }: { initialUsers: User[] }) {
       setError(body.error ?? "failed to change role");
       return;
     }
-    await load();
+    await invalidateUsers();
   }
 
   async function invalidatePassword(u: User) {
@@ -135,7 +144,7 @@ export function UsersClient({ initialUsers }: { initialUsers: User[] }) {
       setError(body.error ?? "failed to invalidate password");
       return;
     }
-    await load();
+    await invalidateUsers();
   }
 
   async function resetPassword(u: User) {
@@ -146,7 +155,7 @@ export function UsersClient({ initialUsers }: { initialUsers: User[] }) {
       return;
     }
     setGenerated({ username: u.username, password: body.generatedPassword });
-    await load();
+    await invalidateUsers();
   }
 
   if (!hasRole(actor, "admin")) {
@@ -200,8 +209,8 @@ export function UsersClient({ initialUsers }: { initialUsers: User[] }) {
                 first login.
               </p>
               {error && <p className="text-sm text-red-600">{error}</p>}
-              <Button type="submit" disabled={saving}>
-                {saving ? "Adding…" : "Add account"}
+              <Button type="submit" disabled={createUserMutation.isPending}>
+                {createUserMutation.isPending ? "Adding…" : "Add account"}
               </Button>
             </form>
           </DialogContent>

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { ThemeProvider } from "@/components/theme-provider";
+import { QueryProvider } from "@/components/query-provider";
 import { Nav } from "@/components/nav";
 import { SessionGuard } from "@/components/session-guard";
 import { CurrentUserProvider } from "@/lib/useCurrentUser";
@@ -17,18 +18,20 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     <html lang="en" suppressHydrationWarning>
       <body>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <div className="app-backdrop" aria-hidden="true" />
-          <CurrentUserProvider initialUser={initialUser}>
-            <SessionGuard />
-            <Nav />
-            {/* md:pl-72 reserves space for the drawer, which defaults open
-                as a persistent sidebar at that breakpoint — see nav-drawer.tsx.
-                mx-auto/max-w-5xl live on the inner div so content is still
-                centered *within* the remaining space, not the full viewport. */}
-            <main className="md:pl-72">
-              <div className="mx-auto max-w-5xl px-6 py-8">{children}</div>
-            </main>
-          </CurrentUserProvider>
+          <QueryProvider>
+            <div className="app-backdrop" aria-hidden="true" />
+            <CurrentUserProvider initialUser={initialUser}>
+              <SessionGuard />
+              <Nav />
+              {/* md:pl-72 reserves space for the drawer, which defaults open
+                  as a persistent sidebar at that breakpoint — see nav-drawer.tsx.
+                  mx-auto/max-w-5xl live on the inner div so content is still
+                  centered *within* the remaining space, not the full viewport. */}
+              <main className="md:pl-72">
+                <div className="mx-auto max-w-5xl px-6 py-8">{children}</div>
+              </main>
+            </CurrentUserProvider>
+          </QueryProvider>
         </ThemeProvider>
       </body>
     </html>
