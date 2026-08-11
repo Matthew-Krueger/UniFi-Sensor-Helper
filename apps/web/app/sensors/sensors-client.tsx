@@ -10,10 +10,11 @@ import type { ConsoleStatus, ProtectConsole, Sensor, SensorStatus } from "@unifi
 import { DURATION_PRESETS } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
-import { absoluteTimeLabel, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { absoluteTimeLabel, preciseAgoLabel, useNow } from "@/lib/format";
 import { reportingBadge } from "@/lib/reportingBadge";
 import { celsiusToFahrenheit } from "@/lib/units";
 import { sensorsResponseSchema, consolesResponseSchema } from "@/lib/apiSchemas";
+import { LiveRelativeTime } from "@/components/live-relative-time";
 
 // Discovery-driven — SPEC.md section 12: sensors are never hand-typed, only
 // ever listed from what /api/sensors/discover found on a configured
@@ -94,6 +95,57 @@ function BatteryIndicator({ battery }: { battery: SensorStatus["battery"] }) {
   );
 }
 
+// Ticks on its own (see useNow) so a console card's badge/"last contacted"
+// re-renders every second without forcing every other console card, or
+// the sensor grid inside this one, to re-render along with it.
+function ConsoleLiveHeader({
+  name,
+  status,
+  observedSeconds,
+}: {
+  name: string;
+  status: ConsoleStatus | undefined;
+  observedSeconds: number | null;
+}) {
+  const now = useNow();
+  const badge = reportingBadge(status?.lastEventAt ?? null, observedSeconds, now);
+  return (
+    <CardHeader>
+      <div className="flex items-center justify-between gap-2">
+        <CardTitle>{name}</CardTitle>
+        <Badge variant={badge.variant}>{badge.label}</Badge>
+      </div>
+      <CardDescription title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined} suppressHydrationWarning>
+        Last contacted: {preciseAgoLabel(status?.lastEventAt ?? null, now)}
+        {observedSeconds != null && ` · reporting every ~${formatInterval(observedSeconds)}`}
+      </CardDescription>
+    </CardHeader>
+  );
+}
+
+// Same idea, one level down — a single sensor's badge/last-seen ticks
+// without forcing its siblings in the grid (or the console card around
+// them) to re-render.
+function SensorLiveStatus({ status }: { status: SensorStatus | undefined }) {
+  const now = useNow();
+  const badge = reportingBadge(status?.lastSeenAt ?? null, status?.observedCheckinIntervalSeconds ?? null, now);
+  return (
+    <>
+      <Badge variant={badge.variant} className="text-[10px]">
+        {badge.label}
+      </Badge>
+      <span
+        className="text-[10px] text-muted-foreground"
+        title={status?.lastSeenAt ? absoluteTimeLabel(status.lastSeenAt) : undefined}
+        suppressHydrationWarning
+      >
+        {preciseAgoLabel(status?.lastSeenAt ?? null, now)}
+        {status?.observedCheckinIntervalSeconds != null && ` · ~${formatInterval(status.observedCheckinIntervalSeconds)}`}
+      </span>
+    </>
+  );
+}
+
 // Picks a column count explicitly by item count rather than leaving it to
 // a fixed breakpoint-driven grid — a fixed `sm:grid-cols-2 lg:grid-cols-3`
 // wraps 4 items as 3-then-1, which reads as a mistake rather than a
@@ -130,7 +182,6 @@ export interface SensorsInitialData {
 // later. The 5s poll below still runs exactly as before to keep values
 // live; it just no longer owns the *first* render.
 export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
-  useNowTick(); // keeps "last contacted"/"refreshed" ticking live, second-by-second
   const { user: actor } = useCurrentUser();
   const queryClient = useQueryClient();
   const temperatureUnit = actor?.temperatureUnit ?? "C";
@@ -212,17 +263,9 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
         <h1 className="text-2xl font-semibold">Sensors</h1>
         {canDiscover && (
           <div className="flex items-center gap-2">
-            {/* suppressHydrationWarning below — "X ago" text is derived from
-                Date.now() at render time, so the server's render and the
-                client's first-paint render a moment later will almost
-                always differ by a second or two; this is the officially
-                recommended way to silence that expected mismatch without
-                discarding the subtree (see Next.js hydration-error docs).
-                useNowTick re-renders with the live value every second
-                after mount regardless. */}
             {lastRefreshedAt && !loading && (
-              <span className="text-xs text-muted-foreground" title={absoluteTimeLabel(lastRefreshedAt)} suppressHydrationWarning>
-                Refreshed {preciseAgoLabel(lastRefreshedAt)}
+              <span className="text-xs text-muted-foreground" title={absoluteTimeLabel(lastRefreshedAt)}>
+                Refreshed <LiveRelativeTime timestamp={lastRefreshedAt} format={preciseAgoLabel} />
               </span>
             )}
             <Button
@@ -280,32 +323,14 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
               .map((s) => statuses.find((x) => x.sensorId === s.id)?.observedCheckinIntervalSeconds)
               .filter((v): v is number => v != null);
             const observedSeconds = observedValues.length > 0 ? Math.min(...observedValues) : null;
-            const badge = reportingBadge(status?.lastEventAt ?? null, observedSeconds);
 
             return (
               <Card key={console_.id}>
-                <CardHeader>
-                  <div className="flex items-center justify-between gap-2">
-                    <CardTitle>{console_.name}</CardTitle>
-                    <Badge variant={badge.variant}>{badge.label}</Badge>
-                  </div>
-                  {/* suppressHydrationWarning — see the Refreshed span above */}
-                  <CardDescription
-                    title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined}
-                    suppressHydrationWarning
-                  >
-                    Last contacted: {preciseAgoLabel(status?.lastEventAt ?? null)}
-                    {observedSeconds != null && ` · reporting every ~${formatInterval(observedSeconds)}`}
-                  </CardDescription>
-                </CardHeader>
+                <ConsoleLiveHeader name={console_.name} status={status} observedSeconds={observedSeconds} />
                 <CardContent>
                   <div className={`grid gap-3 ${gridColsForCount(consoleSensors.length)}`}>
                     {consoleSensors.map((sensor) => {
                       const sensorStatus = statuses.find((s) => s.sensorId === sensor.id);
-                      const sensorBadge = reportingBadge(
-                        sensorStatus?.lastSeenAt ?? null,
-                        sensorStatus?.observedCheckinIntervalSeconds ?? null
-                      );
                       return (
                         <div
                           key={sensor.id}
@@ -314,19 +339,7 @@ export function SensorsClient({ initial }: { initial: SensorsInitialData }) {
                           <p className="text-sm font-medium">{sensor.name}</p>
                           <div className="flex items-center gap-1.5">
                             <BatteryIndicator battery={sensorStatus?.battery ?? null} />
-                            <Badge variant={sensorBadge.variant} className="text-[10px]">
-                              {sensorBadge.label}
-                            </Badge>
-                            {/* suppressHydrationWarning — see the Refreshed span above */}
-                            <span
-                              className="text-[10px] text-muted-foreground"
-                              title={sensorStatus?.lastSeenAt ? absoluteTimeLabel(sensorStatus.lastSeenAt) : undefined}
-                              suppressHydrationWarning
-                            >
-                              {preciseAgoLabel(sensorStatus?.lastSeenAt ?? null)}
-                              {sensorStatus?.observedCheckinIntervalSeconds != null &&
-                                ` · ~${formatInterval(sensorStatus.observedCheckinIntervalSeconds)}`}
-                            </span>
+                            <SensorLiveStatus status={sensorStatus} />
                           </div>
                           {sensor.metrics.length === 0 ? (
                             <span className="text-xs text-muted-foreground">No metrics enabled</span>

@@ -30,8 +30,7 @@ import {
 } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { metricUnitSuffix, toDisplayCondition, toStoredValue } from "@/lib/units";
-import { absoluteTimeLabel, coarseAgoLabel, formatDuration, preciseAgoLabel, useNowTick } from "@/lib/format";
-import { reportingBadge } from "@/lib/reportingBadge";
+import { absoluteTimeLabel, coarseAgoLabel, formatDuration, preciseAgoLabel } from "@/lib/format";
 import {
   WebhookFieldsEditor,
   buildWebhookTarget,
@@ -40,6 +39,8 @@ import {
   type WebhookFormValue,
 } from "@/components/webhook-fields-editor";
 import { sensorsResponseSchema, consolesResponseSchema } from "@/lib/apiSchemas";
+import { LiveRelativeTime } from "@/components/live-relative-time";
+import { SensorReportingStatus } from "@/components/sensor-reporting-status";
 
 // CRUD over /api/latches — "Rule" is the user-facing name for what the
 // domain model (SPEC.md section 4) and API still call a Latch internally;
@@ -367,7 +368,6 @@ export interface RulesInitialData {
 // already has real rules/sensors/deliveries instead of an empty table
 // that pops in once the client's own fetch resolves.
 export function RulesClient({ initial }: { initial: RulesInitialData }) {
-  useNowTick(); // keeps "last used" ticking live, second-by-second
   const { user: actor } = useCurrentUser();
   const canEdit = hasRole(actor, "admin");
   const temperatureUnit = actor?.temperatureUnit ?? "C";
@@ -398,7 +398,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   // could be stale by the time someone actually opens a dialog to check.
   // A one-shot fetch on open isn't enough either — if the sensor reports
   // again while the dialog just sits open (easy to do while filling out
-  // a form), the badge would keep aging via useNowTick without ever
+  // a form), the badge would keep aging via the live clock without ever
   // learning the real reading came in, so it settles on
   // "delayed"/"overdue" and stays there. refetchInterval below keeps
   // polling while either dialog is open, not just once on open, and
@@ -570,10 +570,8 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   // actually reporting right now, before the operator commits to a
   // duration against it — same badge/thresholds as the Sensors page (see
   // lib/reportingBadge.ts), sourced from the same per-sensor checkin data.
-  function sensorReportingStatus(sensorId: string): { badge: ReturnType<typeof reportingBadge>; status?: SensorStatus } {
-    const status = sensorStatuses.find((s) => s.sensorId === sensorId);
-    const badge = reportingBadge(status?.lastSeenAt ?? null, status?.observedCheckinIntervalSeconds ?? null);
-    return { badge, status };
+  function sensorStatusFor(sensorId: string): SensorStatus | undefined {
+    return sensorStatuses.find((s) => s.sensorId === sensorId);
   }
 
   const customDurationTooShort =
@@ -803,27 +801,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                   </option>
                 ))}
               </select>
-              {selectedSensor &&
-                (() => {
-                  const { badge, status } = sensorReportingStatus(selectedSensor.id);
-                  return (
-                    <div className="flex items-center gap-2">
-                      <Badge variant={badge.variant} className="text-[10px]">
-                        {badge.label}
-                      </Badge>
-                      {/* suppressHydrationWarning — "X ago" is derived from
-                          Date.now() at render time; see dashboard-client.tsx's
-                          note on the same pattern. */}
-                      <span
-                        className="text-xs text-muted-foreground"
-                        title={status?.lastSeenAt ? absoluteTimeLabel(status.lastSeenAt) : undefined}
-                        suppressHydrationWarning
-                      >
-                        last seen {preciseAgoLabel(status?.lastSeenAt ?? null)}
-                      </span>
-                    </div>
-                  );
-                })()}
+              {selectedSensor && <SensorReportingStatus status={sensorStatusFor(selectedSensor.id)} label="last seen" />}
             </div>
 
             <div className="flex flex-col gap-1">
@@ -1221,10 +1199,12 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                       <Badge variant={deliveryBadgeVariant(d)}>{d.ok ? "ok" : "failed"}</Badge>
                       {d.status != null && <span className="text-xs text-muted-foreground">HTTP {d.status}</span>}
                     </div>
-                    {/* suppressHydrationWarning — see dashboard-client.tsx's note on this pattern */}
-                    <span className="text-xs text-muted-foreground" title={absoluteTimeLabel(d.dispatchedAt)} suppressHydrationWarning>
-                      {preciseAgoLabel(d.dispatchedAt)}
-                    </span>
+                    <LiveRelativeTime
+                      timestamp={d.dispatchedAt}
+                      format={preciseAgoLabel}
+                      className="text-xs text-muted-foreground"
+                      title={absoluteTimeLabel(d.dispatchedAt)}
+                    />
                   </div>
                   <p className="mt-1 truncate font-mono text-xs text-muted-foreground" title={d.url}>
                     {d.method} {d.url}
@@ -1255,27 +1235,10 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                     <span className="text-xs text-muted-foreground">Sensor</span>
                     <span>{sensorName(detailsRule.sensorId)}</span>
                   </div>
-                  {(() => {
-                    const { badge, status } = sensorReportingStatus(detailsRule.sensorId);
-                    return (
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-muted-foreground">Sensor last seen</span>
-                        <div className="flex items-center gap-2">
-                          <Badge variant={badge.variant} className="text-[10px]">
-                            {badge.label}
-                          </Badge>
-                          {/* suppressHydrationWarning — see the sensor-picker status blurb above */}
-                          <span
-                            className="text-xs text-muted-foreground"
-                            title={status?.lastSeenAt ? absoluteTimeLabel(status.lastSeenAt) : undefined}
-                            suppressHydrationWarning
-                          >
-                            {preciseAgoLabel(status?.lastSeenAt ?? null)}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })()}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground">Sensor last seen</span>
+                    <SensorReportingStatus status={sensorStatusFor(detailsRule.sensorId)} />
+                  </div>
                   <p className="text-muted-foreground">
                     {ruleDescription(detailsRule, sensorName(detailsRule.sensorId), temperatureUnit)}
                   </p>
@@ -1299,9 +1262,8 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                           setDetailsRuleId(null);
                         }}
                       >
-                        {/* suppressHydrationWarning — see dashboard-client.tsx's note on this pattern */}
-                        <Badge variant={deliveryBadgeVariant(detailsLastDelivery)} suppressHydrationWarning>
-                          {preciseAgoLabel(detailsLastDelivery.dispatchedAt)}
+                        <Badge variant={deliveryBadgeVariant(detailsLastDelivery)}>
+                          <LiveRelativeTime timestamp={detailsLastDelivery.dispatchedAt} format={preciseAgoLabel} />
                         </Badge>
                         <span className="text-xs text-muted-foreground">
                           {absoluteTimeLabel(detailsLastDelivery.dispatchedAt)} · view history
@@ -1421,13 +1383,17 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                     <Badge variant={rule.enabled ? "outline" : "idle"}>{rule.enabled ? "enabled" : "disabled"}</Badge>
                   </TableCell>
                   {canEdit && (
-                    // suppressHydrationWarning — see dashboard-client.tsx's note on this pattern
                     <TableCell
                       className="w-24 text-xs text-muted-foreground"
                       title={lastDelivery ? absoluteTimeLabel(lastDelivery.dispatchedAt) : undefined}
-                      suppressHydrationWarning
                     >
-                      {coarseAgoLabel(lastDelivery?.dispatchedAt ?? null)}
+                      {/* coarseAgoLabel is minute-granularity, so a 30s tick is
+                          plenty — no reason to re-render every row every second. */}
+                      <LiveRelativeTime
+                        timestamp={lastDelivery?.dispatchedAt ?? null}
+                        format={coarseAgoLabel}
+                        intervalMs={30000}
+                      />
                     </TableCell>
                   )}
                   <TableCell>

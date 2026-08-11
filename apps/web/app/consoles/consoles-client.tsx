@@ -11,7 +11,7 @@ import type { ConsoleStatus, ProtectConsole, WebhookTarget } from "@unifi-sensor
 import { buildConsoleWebhookUrl, validateWebhookTarget } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { usePausedWhileSelectFocused } from "@/lib/usePausedWhileSelectFocused";
-import { absoluteTimeLabel, formatDuration, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { absoluteTimeLabel, formatDuration, preciseAgoLabel } from "@/lib/format";
 import {
   WebhookFieldsEditor,
   buildWebhookTarget,
@@ -20,6 +20,7 @@ import {
   type WebhookFormValue,
 } from "@/components/webhook-fields-editor";
 import { consolesResponseSchema } from "@/lib/apiSchemas";
+import { LiveRelativeTime } from "@/components/live-relative-time";
 
 // Longer-scale presets than a rule's DURATION_PRESETS (shared/src/
 // interval.ts, capped at 1 hour) — a console going quiet for an hour is
@@ -96,7 +97,6 @@ export interface ConsolesInitialData {
 // has real console cards instead of the "No consoles configured yet"
 // empty state popping in once the client's own fetch resolves.
 export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
-  useNowTick(); // keeps "last contacted" ticking live, second-by-second
   const { user: actor } = useCurrentUser();
   const queryClient = useQueryClient();
   const canManage = hasRole(actor, "admin");
@@ -265,7 +265,7 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
           }
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingId ? "Edit console" : "Add a console"}</DialogTitle>
           </DialogHeader>
@@ -438,16 +438,8 @@ export function ConsolesClient({ initial }: { initial: ConsolesInitialData }) {
                     </div>
                   )}
                   <div>{status?.sensorCount ?? 0} sensor{status?.sensorCount === 1 ? "" : "s"} discovered</div>
-                  {/* suppressHydrationWarning — "X ago" text is derived from
-                      Date.now() at render time, so the server's render and
-                      the client's first-paint render a moment later will
-                      almost always differ by a second or two; this is the
-                      officially recommended way to silence that expected
-                      mismatch without discarding the subtree (see Next.js
-                      hydration-error docs). useNowTick re-renders with the
-                      live value every second after mount regardless. */}
-                  <div title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined} suppressHydrationWarning>
-                    Last contacted: {preciseAgoLabel(status?.lastEventAt ?? null)}
+                  <div title={status?.lastEventAt ? absoluteTimeLabel(status.lastEventAt) : undefined}>
+                    Last contacted: <LiveRelativeTime timestamp={status?.lastEventAt ?? null} format={preciseAgoLabel} />
                   </div>
                   <div>
                     Default webhook ID: {c.defaultWebhookId ?? <span className="italic">not set</span>}

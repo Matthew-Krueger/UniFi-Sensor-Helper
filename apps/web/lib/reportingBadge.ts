@@ -24,15 +24,17 @@ export interface ReportingBadgeResult {
 // lastEventAt/observedSeconds are deliberately generic (not tied to
 // "sensor" vs "console") — callers pass either a console's aggregate
 // lastEventAt or one specific sensor's own lastSeenAt/
-// observedCheckinIntervalSeconds. Elapsed time is always computed against
-// the real clock at call time (callers re-render on a tick — see
-// useNowTick) so a client that hasn't polled in a few seconds is never
-// itself the reason something looks stale.
-export function reportingBadge(lastEventAt: number | null, observedSeconds: number | null): ReportingBadgeResult {
+// observedCheckinIntervalSeconds. `now` is an explicit argument, not an
+// internal Date.now() call, so a client that hasn't polled in a few
+// seconds is never itself the reason something looks stale (callers
+// re-render on a tick — see useNow) and so React Compiler can't mistake
+// this for a pure function of lastEventAt/observedSeconds alone and
+// freeze its output (see preciseAgoLabel's comment on the same issue).
+export function reportingBadge(lastEventAt: number | null, observedSeconds: number | null, now: number): ReportingBadgeResult {
   if (!lastEventAt) return { variant: "idle", label: "no data yet" };
 
   const expectedSeconds = effectiveInterval(observedSeconds, FALLBACK_EXPECTED_SECONDS).seconds;
-  const elapsedSeconds = (Date.now() - lastEventAt) / 1000;
+  const elapsedSeconds = (now - lastEventAt) / 1000;
 
   if (elapsedSeconds <= expectedSeconds * GOOD_MULTIPLIER) return { variant: "good", label: "reporting" };
   if (elapsedSeconds <= expectedSeconds * WARN_MULTIPLIER) return { variant: "armed", label: "delayed" };

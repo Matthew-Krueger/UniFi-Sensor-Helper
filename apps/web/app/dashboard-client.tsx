@@ -5,11 +5,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Latch, LatchStateRecord, Sensor } from "@unifi-sensor-latch/shared";
-import { absoluteTimeLabel, formatDuration, preciseAgoLabel, useNowTick } from "@/lib/format";
+import { absoluteTimeLabel, formatDuration, preciseAgoLabel } from "@/lib/format";
 import { conditionSummary } from "@unifi-sensor-latch/shared";
 import { metricUnitSuffix, toDisplayCondition } from "@/lib/units";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { sensorsResponseSchema } from "@/lib/apiSchemas";
+import { LiveRelativeTime } from "@/components/live-relative-time";
 
 // Client Component polling /api/state every few seconds — SPEC.md section 5:
 // latch state changes on the order of minutes, so polling is simpler than a
@@ -67,7 +68,6 @@ function useLiveState(initial: DashboardInitialData) {
 }
 
 export function DashboardClient({ initial }: { initial: DashboardInitialData }) {
-  useNowTick(); // keeps armed/fired "since" timing ticking live, second-by-second
   const { user: actor } = useCurrentUser();
   const temperatureUnit = actor?.temperatureUnit ?? "C";
   const { rules, sensors, states } = useLiveState(initial);
@@ -106,16 +106,12 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
                   <CardTitle className="text-base">{sensorName(rule.sensorId)}</CardTitle>
                   <Badge variant={label as "idle" | "armed" | "fired"}>{label}</Badge>
                 </div>
-                {/* suppressHydrationWarning: "X ago" is computed from Date.now()
-                    at render time, so the server's render and the client's
-                    first-paint render (a moment later, over the network) will
-                    almost always differ by a second or two — that's expected,
-                    not a bug, and this is the officially recommended way to
-                    silence the resulting warning without discarding/
-                    regenerating the whole subtree (see Next.js's hydration
-                    error docs). useNowTick still re-renders this with the
-                    live value every second after mount. */}
-                <CardDescription title={sinceTimestamp ? absoluteTimeLabel(sinceTimestamp) : undefined} suppressHydrationWarning>
+                {/* The "X ago" suffix is computed from a live clock (see
+                    LiveRelativeTime/useNow) at render time, so the
+                    server's render and the client's first-paint render a
+                    moment later will almost always differ by a second or
+                    two — that's expected, not a bug. */}
+                <CardDescription title={sinceTimestamp ? absoluteTimeLabel(sinceTimestamp) : undefined}>
                   {rule.metric}{" "}
                   {rule.metric === "leak"
                     ? "detected"
@@ -123,7 +119,12 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
                         toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
                         metricUnitSuffix(rule.metric, temperatureUnit)
                       )}
-                  {sinceTimestamp ? ` · ${preciseAgoLabel(sinceTimestamp)}` : ""}
+                  {sinceTimestamp && (
+                    <>
+                      {" · "}
+                      <LiveRelativeTime timestamp={sinceTimestamp} format={preciseAgoLabel} />
+                    </>
+                  )}
                 </CardDescription>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground">
