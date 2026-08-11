@@ -11,9 +11,40 @@ function freshStore(): ConfigStore {
   return new ConfigStore(createTestDb());
 }
 
+// Foreign keys are enforced (PRAGMA foreign_keys = ON — see db.ts), so a
+// latch_state/latches row needs its parent chain (console -> sensor ->
+// latch) inserted first.
+function seedLatch(store: ConfigStore, id: string): void {
+  store.upsertProtectConsole({
+    id: "console-1",
+    name: "Main site NVR",
+    host: "10.0.0.1",
+    apiKey: "test-key",
+    apiBaseUrlOverride: null,
+    defaultWebhookId: null,
+    downAlertEnabled: false,
+    downAlertDurationSeconds: null,
+    downAlertWebhook: null,
+    downAlertResolvedWebhook: null,
+    createdAt: 0,
+  });
+  store.upsertSensor({ id: "sensor-1", consoleId: "console-1", name: "Walk-in Freezer", metrics: ["temperature"] });
+  store.upsertLatch({
+    id,
+    name: null,
+    sensorId: "sensor-1",
+    metric: "temperature",
+    condition: { type: "above", threshold: 55, hysteresis: { mode: "manual", clearThreshold: 38 } },
+    durationSeconds: 600,
+    webhook: { kind: "custom", url: "https://example.invalid/webhook", method: "POST" },
+    enabled: true,
+  });
+}
+
 describe("ConfigStore latch state persistence", () => {
   test("an armed state survives a save/reload round-trip", () => {
     const store = freshStore();
+    seedLatch(store, "freezer-temp");
 
     store.saveLatchState({
       latchId: "freezer-temp",
@@ -35,6 +66,19 @@ describe("ConfigStore latch state persistence", () => {
   test("latches and sensors round-trip through upsert", () => {
     const store = freshStore();
 
+    store.upsertProtectConsole({
+      id: "console-1",
+      name: "Main site NVR",
+      host: "10.0.0.1",
+      apiKey: "test-key",
+      apiBaseUrlOverride: null,
+      defaultWebhookId: null,
+      downAlertEnabled: false,
+      downAlertDurationSeconds: null,
+      downAlertWebhook: null,
+      downAlertResolvedWebhook: null,
+      createdAt: 0,
+    });
     store.upsertSensor({ id: "sensor-1", consoleId: "console-1", name: "Walk-in Freezer", metrics: ["temperature"] });
     store.upsertLatch({
       id: "freezer-temp",
@@ -57,6 +101,21 @@ describe("ConfigStore latch state persistence", () => {
   test("a legacy flat webhook row (pre-console-webhook, no `kind`) normalizes to a custom target", () => {
     const db = createTestDb();
     const store = new ConfigStore(db);
+
+    store.upsertProtectConsole({
+      id: "console-1",
+      name: "Main site NVR",
+      host: "10.0.0.1",
+      apiKey: "test-key",
+      apiBaseUrlOverride: null,
+      defaultWebhookId: null,
+      downAlertEnabled: false,
+      downAlertDurationSeconds: null,
+      downAlertWebhook: null,
+      downAlertResolvedWebhook: null,
+      createdAt: 0,
+    });
+    store.upsertSensor({ id: "sensor-1", consoleId: "console-1", name: "Walk-in Freezer", metrics: ["temperature"] });
 
     // Simulates a row written before the console-webhook redesign — back
     // when WebhookTarget was just {url, method, headers?, bodyTemplate?}

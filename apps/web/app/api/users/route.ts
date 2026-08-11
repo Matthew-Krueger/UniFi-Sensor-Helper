@@ -44,8 +44,14 @@ export async function POST(req: NextRequest) {
     if (!password.success) {
       return NextResponse.json({ error: password.error.issues[0]?.message }, { status: 400 });
     }
-    // role is ignored — addUser always forces superadmin when the table is empty.
-    const user = await engine.auth.addUser(username.data, password.data);
+    // role is ignored — the first account is always superadmin.
+    // tryCreateFirstUser re-checks emptiness atomically with the insert
+    // (see its doc comment) — the isBootstrap check above is only a fast
+    // path, not the actual gate, since it's racy on its own.
+    const user = await engine.auth.tryCreateFirstUser(username.data, password.data);
+    if (!user) {
+      return NextResponse.json({ error: "Setup already completed. Please log in." }, { status: 409 });
+    }
     return NextResponse.json({ user }, { status: 201 });
   }
 

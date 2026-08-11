@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getEngine } from "@unifi-sensor-latch/engine";
+import { ConsoleHasSensorsError, getEngine } from "@unifi-sensor-latch/engine";
 import type { ProtectConsole, WebhookTarget } from "@unifi-sensor-latch/shared";
 import {
   consoleApiBaseUrlOverrideSchema,
@@ -145,7 +145,19 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
 
   const { id } = await params;
   const engine = getEngine();
+
+  try {
+    engine.config.deleteProtectConsole(id);
+  } catch (err) {
+    if (err instanceof ConsoleHasSensorsError) {
+      return NextResponse.json(
+        { error: "This console still has sensors attached. Remove them before deleting the console." },
+        { status: 409 },
+      );
+    }
+    throw err;
+  }
+
   engine.disconnectConsole(id);
-  engine.config.deleteProtectConsole(id);
   return NextResponse.json({ ok: true });
 }

@@ -4,7 +4,7 @@ import type { Role, User } from "@unifi-sensor-latch/shared";
 import { maskSecret } from "@unifi-sensor-latch/shared";
 import { getDb } from "./db";
 import * as schema from "./schema";
-import { users } from "./schema";
+import { DEFAULT_TEMPERATURE_UNIT, users } from "./schema";
 
 // Argon2id hashing via Bun's built-in Bun.password — no extra dependency.
 // Plaintext passwords are never stored or logged; any log line that touches
@@ -73,22 +73,72 @@ export class AuthStore {
   // always false here. Admin-created accounts go through
   // createUserWithGeneratedPassword instead, never this.
   //
-  // role defaults to "user"; the very first account (count() === 0 at call
-  // time) is always forced to "superadmin" regardless of what's passed, so
-  // there's never a deployment with zero superadmins.
+  // role defaults to "user"; the very first account is always forced to
+  // "superadmin" regardless of what's passed, so there's never a
+  // deployment with zero superadmins. The count-then-insert has to happen
+  // inside one synchronous db.transaction() callback (no `await` between
+  // them) — otherwise two concurrent bootstrap signups could both read
+  // count() === 0 before either insert lands, and both come out
+  // "superadmin". Bun.password.hash is awaited *before* the transaction so
+  // the whole synchronous block is just the count check + the insert, kept
+  // as short as possible to hold the write lock for the least time.
   async addUser(username: string, password: string, role: Role = "user"): Promise<User> {
-    const isFirstAccount = this.count() === 0;
-    const effectiveRole: Role = isFirstAccount ? "superadmin" : role;
-
     const id = crypto.randomUUID();
     const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
     const createdAt = Date.now();
-    this.db
-      .insert(users)
-      .values({ id, username, passwordHash, role: effectiveRole, mustResetPassword: false, createdAt })
-      .run();
+
+    const effectiveRole = this.db.transaction((tx) => {
+      const isFirstAccount = tx.select().from(users).all().length === 0;
+      const role_: Role = isFirstAccount ? "superadmin" : role;
+      tx.insert(users).values({ id, username, passwordHash, role: role_, mustResetPassword: false, createdAt }).run();
+      return role_;
+    });
+
     console.log(`[auth] created user "${username}" as ${effectiveRole} (password ${maskSecret(password)})`);
-    return { id, username, role: effectiveRole, mustResetPassword: false, temperatureUnit: "C", createdAt };
+    return {
+      id,
+      username,
+      role: effectiveRole,
+      mustResetPassword: false,
+      temperatureUnit: DEFAULT_TEMPERATURE_UNIT,
+      createdAt,
+    };
+  }
+
+  // Atomic version of "count() === 0, then create as superadmin" — the
+  // ONLY thing that's allowed to create an account without a session (see
+  // CLAUDE.md: that gate must be "explicit and unconditional," never
+  // inferred). The unauthenticated route (POST /api/users) does a cheap
+  // count() === 0 check up front purely to decide whether to skip
+  // requireRole at all — but that check-then-act is itself a race between
+  // two concurrent requests, so the real gate has to live here, atomic
+  // with the insert. Returns null if another request already created the
+  // first account between the route's pre-check and this call; the caller
+  // MUST treat null as "setup already done, log in instead" and never fall
+  // through to creating an account without auth.
+  async tryCreateFirstUser(username: string, password: string): Promise<User | null> {
+    const id = crypto.randomUUID();
+    const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
+    const createdAt = Date.now();
+
+    const created = this.db.transaction((tx) => {
+      if (tx.select().from(users).all().length > 0) return false;
+      tx.insert(users)
+        .values({ id, username, passwordHash, role: "superadmin", mustResetPassword: false, createdAt })
+        .run();
+      return true;
+    });
+    if (!created) return null;
+
+    console.log(`[auth] created user "${username}" as superadmin (password ${maskSecret(password)})`);
+    return {
+      id,
+      username,
+      role: "superadmin",
+      mustResetPassword: false,
+      temperatureUnit: DEFAULT_TEMPERATURE_UNIT,
+      createdAt,
+    };
   }
 
   // Admin-created accounts: the admin never types a password for someone
@@ -102,7 +152,10 @@ export class AuthStore {
     const createdAt = Date.now();
     this.db.insert(users).values({ id, username, passwordHash, role, mustResetPassword: true, createdAt }).run();
     console.log(`[auth] created user "${username}" as ${role} with a generated password (reset required)`);
-    return { user: { id, username, role, mustResetPassword: true, temperatureUnit: "C", createdAt }, password };
+    return {
+      user: { id, username, role, mustResetPassword: true, temperatureUnit: DEFAULT_TEMPERATURE_UNIT, createdAt },
+      password,
+    };
   }
 
   // Self-service display preference — not gated by role, every account

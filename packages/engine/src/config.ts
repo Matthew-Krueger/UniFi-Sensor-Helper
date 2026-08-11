@@ -11,6 +11,16 @@ import { latches, latchState, protectConsoles, sensors, webhookDeliveries } from
 // periodic tasks).
 const MAX_DELIVERIES_PER_LATCH = 10;
 
+// Thrown by ConfigStore.deleteProtectConsole when the console still has
+// sensors attached — callers (the DELETE route) map this to a 409 rather
+// than letting a raw SQLITE_CONSTRAINT error reach the client.
+export class ConsoleHasSensorsError extends Error {
+  constructor(public readonly consoleId: string) {
+    super(`Console ${consoleId} still has sensors attached; remove them before deleting the console.`);
+    this.name = "ConsoleHasSensorsError";
+  }
+}
+
 // Typed read/write over the sensors / latches / latch_state /
 // protect_consoles tables via Drizzle. Replaces the config.json read/write
 // layer originally described in SPEC.md section 6.
@@ -161,8 +171,28 @@ export class ConfigStore {
       .run();
   }
 
+  // Consoles are never cascade-deleted (see schema.ts's sensors.consoleId
+  // FK, onDelete: "restrict") — an operator has to remove a console's
+  // sensors (and, transitively, any latches on them) explicitly first, so
+  // deleting a console can never silently take latches/webhook history
+  // with it. This check gives a clean, actionable error instead of
+  // surfacing a raw SQLITE_CONSTRAINT failure to the caller.
+  // Relies on the DB-level FK (sensors.consoleId, onDelete: "restrict" —
+  // see schema.ts) as the actual gate, rather than a select-then-delete: a
+  // pre-check has a TOCTOU gap (a sensor could be added between the check
+  // and the delete), while the constraint is enforced atomically by SQLite
+  // as part of the delete statement itself. We only catch the constraint
+  // failure to turn it into ConsoleHasSensorsError for the route to map to
+  // a clean 409.
   deleteProtectConsole(id: string): void {
-    this.db.delete(protectConsoles).where(eq(protectConsoles.id, id)).run();
+    try {
+      this.db.delete(protectConsoles).where(eq(protectConsoles.id, id)).run();
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("FOREIGN KEY constraint failed")) {
+        throw new ConsoleHasSensorsError(id);
+      }
+      throw err;
+    }
   }
 
   listLatches(): Latch[] {
@@ -199,10 +229,13 @@ export class ConfigStore {
       .run();
   }
 
+  // latch_state and webhook_deliveries both reference latches.id with
+  // onDelete: "cascade" (see schema.ts) — one statement is both simpler
+  // and actually atomic, where three separate deletes were not (a crash
+  // between them could leave latch_state/webhook_deliveries rows for a
+  // latch that no longer exists).
   deleteLatch(id: string): void {
     this.db.delete(latches).where(eq(latches.id, id)).run();
-    this.db.delete(latchState).where(eq(latchState.latchId, id)).run();
-    this.db.delete(webhookDeliveries).where(eq(webhookDeliveries.latchId, id)).run();
   }
 
   // Called after every dispatchWebhook (fired/resolved/test — see
@@ -211,33 +244,39 @@ export class ConfigStore {
   // the most recent MAX_DELIVERIES_PER_LATCH rows for this latch right
   // after inserting — bounded growth without a retention job.
   recordWebhookDelivery(delivery: WebhookDelivery): void {
-    this.db
-      .insert(webhookDeliveries)
-      .values({
-        id: delivery.id,
-        latchId: delivery.latchId,
-        kind: delivery.kind,
-        url: delivery.url,
-        method: delivery.method,
-        ok: delivery.ok,
-        status: delivery.status,
-        error: delivery.error,
-        responseBodySnippet: delivery.responseBodySnippet,
-        attempts: delivery.attempts,
-        dispatchedAt: delivery.dispatchedAt,
-      })
-      .run();
+    // Insert + prune-to-N as one transaction: without it, a crash between
+    // the two leaves an extra row past MAX_DELIVERIES_PER_LATCH sitting in
+    // the table until the next delivery for this latch prunes it — not
+    // dangerous, but the whole point of pruning inline is to avoid needing
+    // a separate cleanup pass, so it should actually be atomic.
+    this.db.transaction((tx) => {
+      tx.insert(webhookDeliveries)
+        .values({
+          id: delivery.id,
+          latchId: delivery.latchId,
+          kind: delivery.kind,
+          url: delivery.url,
+          method: delivery.method,
+          ok: delivery.ok,
+          status: delivery.status,
+          error: delivery.error,
+          responseBodySnippet: delivery.responseBodySnippet,
+          attempts: delivery.attempts,
+          dispatchedAt: delivery.dispatchedAt,
+        })
+        .run();
 
-    const rows = this.db
-      .select({ id: webhookDeliveries.id })
-      .from(webhookDeliveries)
-      .where(eq(webhookDeliveries.latchId, delivery.latchId))
-      .orderBy(desc(webhookDeliveries.dispatchedAt))
-      .all();
-    const staleIds = rows.slice(MAX_DELIVERIES_PER_LATCH).map((r) => r.id);
-    if (staleIds.length > 0) {
-      this.db.delete(webhookDeliveries).where(inArray(webhookDeliveries.id, staleIds)).run();
-    }
+      const rows = tx
+        .select({ id: webhookDeliveries.id })
+        .from(webhookDeliveries)
+        .where(eq(webhookDeliveries.latchId, delivery.latchId))
+        .orderBy(desc(webhookDeliveries.dispatchedAt))
+        .all();
+      const staleIds = rows.slice(MAX_DELIVERIES_PER_LATCH).map((r) => r.id);
+      if (staleIds.length > 0) {
+        tx.delete(webhookDeliveries).where(inArray(webhookDeliveries.id, staleIds)).run();
+      }
+    });
   }
 
   // Most recent first — the Rules page shows [0] as "last used" and lists

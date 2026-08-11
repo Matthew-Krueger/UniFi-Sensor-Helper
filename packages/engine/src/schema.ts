@@ -1,4 +1,10 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
+
+// Single source of truth for the users.temperatureUnit default — both the
+// column default below and every in-memory User auth.ts returns before a
+// read-back (addUser, createUserWithGeneratedPassword) reference this
+// instead of duplicating the literal "C".
+export const DEFAULT_TEMPERATURE_UNIT = "C" as const;
 
 // Drizzle schema — source of truth for the SQLite tables described in
 // SPEC.md section 6. Run `bun run db:generate` after changing this file to
@@ -8,22 +14,30 @@ import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
 
 export const sensors = sqliteTable("sensors", {
   id: text("id").primaryKey(), // Protect device id
-  consoleId: text("console_id").notNull(),
+  consoleId: text("console_id")
+    .notNull()
+    .references(() => protectConsoles.id, { onDelete: "restrict" }),
   name: text("name").notNull(),
   discoveredMetrics: text("discovered_metrics").notNull().default("[]"), // JSON array of Metric
 });
 
-export const latches = sqliteTable("latches", {
-  id: text("id").primaryKey(),
-  name: text("name"), // operator-chosen label, optional — see shared/src/types.ts's Latch.name
-  sensorId: text("sensor_id").notNull(),
-  metric: text("metric").notNull(),
-  conditionJson: text("condition_json").notNull(), // RuleCondition JSON — see shared/src/condition.ts
-  durationSeconds: integer("duration_seconds").notNull(),
-  webhookJson: text("webhook_json").notNull(),
-  resolvedWebhookJson: text("resolved_webhook_json"),
-  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-});
+export const latches = sqliteTable(
+  "latches",
+  {
+    id: text("id").primaryKey(),
+    name: text("name"), // operator-chosen label, optional — see shared/src/types.ts's Latch.name
+    sensorId: text("sensor_id")
+      .notNull()
+      .references(() => sensors.id, { onDelete: "cascade" }),
+    metric: text("metric").notNull(),
+    conditionJson: text("condition_json").notNull(), // RuleCondition JSON — see shared/src/condition.ts
+    durationSeconds: integer("duration_seconds").notNull(),
+    webhookJson: text("webhook_json").notNull(),
+    resolvedWebhookJson: text("resolved_webhook_json"),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  },
+  (table) => [index("latches_sensor_id_idx").on(table.sensorId)],
+);
 
 // A short history of webhook delivery attempts per rule — "last used" and
 // "inspect the last response" (Rules page) read from here. Pruned to the
@@ -31,22 +45,34 @@ export const latches = sqliteTable("latches", {
 // ConfigStore.recordWebhookDelivery) rather than via a scheduled job —
 // CLAUDE.md says no external scheduler for periodic tasks, and pruning
 // inline on write needs no scheduling at all.
-export const webhookDeliveries = sqliteTable("webhook_deliveries", {
-  id: text("id").primaryKey(),
-  latchId: text("latch_id").notNull(),
-  kind: text("kind").notNull(), // "fired" | "resolved" | "test"
-  url: text("url").notNull(),
-  method: text("method").notNull(),
-  ok: integer("ok", { mode: "boolean" }).notNull(),
-  status: integer("status"),
-  error: text("error"),
-  responseBodySnippet: text("response_body_snippet"),
-  attempts: integer("attempts").notNull(),
-  dispatchedAt: integer("dispatched_at").notNull(),
-});
+export const webhookDeliveries = sqliteTable(
+  "webhook_deliveries",
+  {
+    id: text("id").primaryKey(),
+    latchId: text("latch_id")
+      .notNull()
+      .references(() => latches.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(), // "fired" | "resolved" | "test"
+    url: text("url").notNull(),
+    method: text("method").notNull(),
+    ok: integer("ok", { mode: "boolean" }).notNull(),
+    status: integer("status"),
+    error: text("error"),
+    responseBodySnippet: text("response_body_snippet"),
+    attempts: integer("attempts").notNull(),
+    dispatchedAt: integer("dispatched_at").notNull(),
+  },
+  // Every read against this table filters by latchId and orders by
+  // dispatchedAt desc (listWebhookDeliveries, the prune-to-N-per-latch
+  // logic in ConfigStore.recordWebhookDelivery) — a plain latchId index
+  // wouldn't cover the sort, so it's composite.
+  (table) => [index("webhook_deliveries_latch_id_dispatched_at_idx").on(table.latchId, table.dispatchedAt)],
+);
 
 export const latchState = sqliteTable("latch_state", {
-  latchId: text("latch_id").primaryKey(),
+  latchId: text("latch_id")
+    .primaryKey()
+    .references(() => latches.id, { onDelete: "cascade" }),
   state: text("state").notNull().default("idle"), // "idle" | "armed" | "fired"
   armedAt: integer("armed_at"),
   firedAt: integer("fired_at"),
@@ -73,7 +99,7 @@ export const users = sqliteTable("users", {
   // Per-user display preference only — never affects storage or the
   // engine (metric values are always stored/evaluated in Celsius; this is
   // a UI-layer conversion at render time).
-  temperatureUnit: text("temperature_unit").notNull().default("C"), // "C" | "F"
+  temperatureUnit: text("temperature_unit").notNull().default(DEFAULT_TEMPERATURE_UNIT), // "C" | "F"
   createdAt: integer("created_at").notNull(),
 });
 

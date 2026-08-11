@@ -39,6 +39,7 @@ export function getDb(): BunSQLiteDatabase<typeof schema> {
 
   const sqlite = new Database(path, { create: true });
   sqlite.exec("PRAGMA journal_mode = WAL;");
+  sqlite.exec("PRAGMA foreign_keys = ON;");
 
   db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
@@ -49,6 +50,7 @@ export function getDb(): BunSQLiteDatabase<typeof schema> {
 // db with the schema applied, without going through migration files.
 export function createTestDb(): BunSQLiteDatabase<typeof schema> {
   const sqlite = new Database(":memory:");
+  sqlite.exec("PRAGMA foreign_keys = ON;");
   const testDb = drizzle(sqlite, { schema });
   migrate(testDb, { migrationsFolder: MIGRATIONS_FOLDER });
   return testDb;

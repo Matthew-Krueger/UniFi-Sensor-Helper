@@ -43,6 +43,34 @@ describe("AuthStore bootstrap and roles", () => {
     expect(second.role).toBe("admin");
   });
 
+  // Two concurrent bootstrap signups both see an empty table and race to
+  // become "first" — exactly the scenario the project owner flagged as
+  // "not atomic." tryCreateFirstUser must let exactly one through as
+  // superadmin and reject the other, never create two superadmins from a
+  // single empty table.
+  test("concurrent bootstrap signups: exactly one becomes the first account", async () => {
+    const store = new AuthStore(createTestDb());
+
+    const [a, b] = await Promise.all([
+      store.tryCreateFirstUser("alice", "hunter2hunter2"),
+      store.tryCreateFirstUser("bob", "hunter2hunter2"),
+    ]);
+
+    const winners = [a, b].filter((u) => u !== null);
+    expect(winners).toHaveLength(1);
+    expect(winners[0]?.role).toBe("superadmin");
+    expect(store.count()).toBe(1);
+  });
+
+  test("tryCreateFirstUser returns null once an account already exists", async () => {
+    const store = new AuthStore(createTestDb());
+    await store.addUser("alice", "hunter2hunter2");
+
+    const result = await store.tryCreateFirstUser("bob", "hunter2hunter2");
+    expect(result).toBeNull();
+    expect(store.count()).toBe(1);
+  });
+
   test("setRole rejects a non-superadmin actor", async () => {
     const store = new AuthStore(createTestDb());
     const alice = await store.addUser("alice", "hunter2hunter2"); // superadmin (first account)
