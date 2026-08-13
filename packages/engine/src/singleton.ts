@@ -482,6 +482,9 @@ export class LatchEngine {
       const current = this.config.getLatchState(latch.id) ?? initialState(latch.id, reading.timestamp);
       const { next, transition } = applyReading(latch, current, reading);
       this.config.saveLatchState(next);
+      if (transition.type !== "none") {
+        this.config.recordLatchTransition(latch.id, transition.type, reading.timestamp);
+      }
 
       const sensorName = sensor?.name ?? reading.sensorId;
 
