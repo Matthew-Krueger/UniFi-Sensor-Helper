@@ -210,7 +210,9 @@ function LatchStatsPanel({
                 {window}
               </div>
             ))}
-            <CountsRow stats={stats} />
+            <StatsRow label="Armed" stats={stats} field="armedCount" format={(n) => String(n)} />
+            <StatsRow label="Fired" stats={stats} field="firedCount" format={(n) => String(n)} />
+            <StatsRow label="Idle" stats={stats} field="idleCount" format={(n) => String(n)} />
             <StatsRow label="Time armed" stats={stats} field="armedSeconds" format={formatDuration} />
             <StatsRow label="Time fired" stats={stats} field="firedSeconds" format={formatDuration} />
           </div>
@@ -222,23 +224,6 @@ function LatchStatsPanel({
         </div>
       )}
     </div>
-  );
-}
-
-// Armed, fired, and idle counts collapsed into one "3 / 1 / 2" cell per
-// window instead of three separate rows — the three counters read fine
-// together since they're always small integers, and it cuts row count
-// from five down to three.
-function CountsRow({ stats }: { stats: LatchStats }) {
-  return (
-    <>
-      <div title="Armed / fired / idle counts">Armed / fired / idle</div>
-      {TABLE_WINDOWS.map((window) => (
-        <div key={window} className="text-center">
-          {stats[window].armedCount} / {stats[window].firedCount} / {stats[window].idleCount}
-        </div>
-      ))}
-    </>
   );
 }
 
