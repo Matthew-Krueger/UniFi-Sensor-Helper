@@ -81,6 +81,25 @@ describe("latch state machine", () => {
     expect(next.state).toBe("idle");
   });
 
+  test("stays fired on a subsequent reading without recovering — no re-fire", () => {
+    const fired = {
+      ...initialState(freezerLatch.id, 0),
+      state: "fired" as const,
+      armedAt: 1000,
+      firedAt: 1000 + freezerLatch.durationSeconds * 1000,
+    };
+    const { next, transition } = applyReading(freezerLatch, fired, {
+      sensorId: freezerLatch.sensorId,
+      metric: freezerLatch.metric,
+      value: 60, // still above armThreshold, still not recovered
+      timestamp: fired.firedAt! + 1000,
+    });
+
+    expect(transition.type).toBe("none");
+    expect(next.state).toBe("fired");
+    expect(next.firedAt).toBe(fired.firedAt);
+  });
+
   test("a routine clear that never armed long enough never reaches fired, so never resolves", () => {
     const start = initialState(freezerLatch.id, 0);
     const armedResult = applyReading(freezerLatch, start, {
