@@ -5,3 +5,4 @@ export * from "./stateMachine";
 export * from "./protect";
 export * from "./webhookDispatcher";
 export * from "./singleton";
+export * from "./latchStats";
