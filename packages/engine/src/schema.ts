@@ -69,6 +69,28 @@ export const webhookDeliveries = sqliteTable(
   (table) => [index("webhook_deliveries_latch_id_dispatched_at_idx").on(table.latchId, table.dispatchedAt)],
 );
 
+// Append-only event log of every latch state-machine transition (armed,
+// fired, resolved, cleared-before-fire). Separate from latch_state (which
+// only holds the *current* state) — this is what the dashboard's windowed
+// arm/fire/idle counters and time-in-state durations read from. No
+// backfill: rows only exist from when this table was introduced onward.
+export const latchTransitions = sqliteTable(
+  "latch_transitions",
+  {
+    id: text("id").primaryKey(),
+    latchId: text("latch_id")
+      .notNull()
+      .references(() => latches.id, { onDelete: "cascade" }),
+    type: text("type").notNull(), // "armed" | "fired" | "resolved" | "cleared-before-fire"
+    timestamp: integer("timestamp").notNull(),
+  },
+  // Every read filters by latchId and needs chronological order (windowed
+  // aggregation, clear-all-for-latch) — a plain latchId index wouldn't
+  // cover the sort, so it's composite, matching the existing
+  // webhook_deliveries_latch_id_dispatched_at_idx pattern.
+  (table) => [index("latch_transitions_latch_id_timestamp_idx").on(table.latchId, table.timestamp)],
+);
+
 export const latchState = sqliteTable("latch_state", {
   latchId: text("latch_id")
     .primaryKey()
