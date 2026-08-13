@@ -3,12 +3,13 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { Latch, LatchStateRecord, Sensor } from "@unifi-sensor-latch/shared";
+import type { Latch, LatchStateRecord, LatchStats, Sensor } from "@unifi-sensor-latch/shared";
 import { absoluteTimeLabel, formatDuration, preciseAgoLabel } from "@/lib/format";
 import { conditionSummary } from "@unifi-sensor-latch/shared";
 import { metricUnitSuffix, toDisplayCondition } from "@/lib/units";
-import { useCurrentUser } from "@/lib/useCurrentUser";
+import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { sensorsResponseSchema } from "@/lib/apiSchemas";
 import { LiveRelativeTime } from "@/components/live-relative-time";
 
@@ -74,6 +75,38 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
   const sensorName = (id: string) => sensors.find((s) => s.id === id)?.name ?? id;
   const stateFor = (ruleId: string) => states.find((s) => s.latchId === ruleId);
 
+  const [statsByLatchId, setStatsByLatchId] = React.useState<Record<string, LatchStats | null>>({});
+
+  React.useEffect(() => {
+    let cancelled = false;
+    async function loadStats() {
+      const entries = await Promise.all(
+        rules.map(async (rule) => {
+          const res = await fetch(`/api/latches/${rule.id}/stats`);
+          if (!res.ok) return [rule.id, null] as const;
+          const data = await res.json();
+          return [rule.id, data.stats as LatchStats] as const;
+        })
+      );
+      if (!cancelled) setStatsByLatchId(Object.fromEntries(entries));
+    }
+    loadStats();
+    return () => {
+      cancelled = true;
+    };
+  }, [rules]);
+
+  async function clearStats(latchId: string, latchName: string | null) {
+    const label = latchName ?? "this rule";
+    if (!window.confirm(`This permanently deletes history for ${label}. This cannot be undone.`)) return;
+    await fetch(`/api/latches/${latchId}/stats?action=clear`, { method: "POST" });
+    const res = await fetch(`/api/latches/${latchId}/stats`);
+    if (res.ok) {
+      const data = await res.json();
+      setStatsByLatchId((prev) => ({ ...prev, [latchId]: data.stats }));
+    }
+  }
+
   if (rules.length === 0) {
     return (
       <div className="flex flex-col gap-4">
@@ -130,11 +163,62 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
               <CardContent className="text-sm text-muted-foreground">
                 Arms for {formatDuration(rule.durationSeconds)} before firing.
                 {!rule.enabled && <div className="mt-1 text-amber-600 dark:text-amber-400">Disabled</div>}
+                {statsByLatchId[rule.id] && (
+                  <div className="mt-3 text-xs text-muted-foreground">
+                    <div className="grid grid-cols-6 gap-1">
+                      <div></div>
+                      <div className="text-center font-medium">1d</div>
+                      <div className="text-center font-medium">7d</div>
+                      <div className="text-center font-medium">30d</div>
+                      <div className="text-center font-medium">365d</div>
+                      <div className="text-center font-medium">All</div>
+                      {(["armedCount", "firedCount", "idleCount"] as const).map((field) => (
+                        <StatsRow key={field} label={statLabel(field)} stats={statsByLatchId[rule.id]!} field={field} format={(n) => String(n)} />
+                      ))}
+                      <StatsRow label="Time armed" stats={statsByLatchId[rule.id]!} field="armedSeconds" format={formatDuration} />
+                      <StatsRow label="Time fired" stats={statsByLatchId[rule.id]!} field="firedSeconds" format={formatDuration} />
+                    </div>
+                    {actor && hasRole(actor, "superadmin") && (
+                      <Button variant="outline" size="sm" className="mt-2" onClick={() => clearStats(rule.id, rule.name)}>
+                        Clear stats
+                      </Button>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           );
         })}
       </div>
     </div>
+  );
+}
+
+function statLabel(field: "armedCount" | "firedCount" | "idleCount"): string {
+  if (field === "armedCount") return "Armed";
+  if (field === "firedCount") return "Fired";
+  return "Idle";
+}
+
+function StatsRow({
+  label,
+  stats,
+  field,
+  format,
+}: {
+  label: string;
+  stats: LatchStats;
+  field: keyof LatchStats["1d"];
+  format: (n: number) => string;
+}) {
+  return (
+    <>
+      <div>{label}</div>
+      <div className="text-center">{format(stats["1d"][field])}</div>
+      <div className="text-center">{format(stats["7d"][field])}</div>
+      <div className="text-center">{format(stats["30d"][field])}</div>
+      <div className="text-center">{format(stats["365d"][field])}</div>
+      <div className="text-center">{format(stats.all[field])}</div>
+    </>
   );
 }

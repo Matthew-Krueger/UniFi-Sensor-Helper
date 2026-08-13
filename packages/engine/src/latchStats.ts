@@ -1,16 +1,12 @@
-import type { LatchStateRecord, LatchTransitionRecord } from "@unifi-sensor-latch/shared";
+import type {
+  LatchStateRecord,
+  LatchStats,
+  LatchStatsWindow,
+  LatchStatsWindowKey,
+  LatchTransitionRecord,
+} from "@unifi-sensor-latch/shared";
 
-export type LatchStatsWindowKey = "1d" | "7d" | "30d" | "365d" | "all";
-
-export interface LatchStatsWindow {
-  armedCount: number;
-  firedCount: number;
-  idleCount: number;
-  armedSeconds: number;
-  firedSeconds: number;
-}
-
-export type LatchStats = Record<LatchStatsWindowKey, LatchStatsWindow>;
+export type { LatchStats, LatchStatsWindow, LatchStatsWindowKey } from "@unifi-sensor-latch/shared";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

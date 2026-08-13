@@ -141,6 +141,18 @@ export interface LatchTransitionRecord {
   timestamp: number;
 }
 
+export type LatchStatsWindowKey = "1d" | "7d" | "30d" | "365d" | "all";
+
+export interface LatchStatsWindow {
+  armedCount: number;
+  firedCount: number;
+  idleCount: number;
+  armedSeconds: number;
+  firedSeconds: number;
+}
+
+export type LatchStats = Record<LatchStatsWindowKey, LatchStatsWindow>;
+
 export interface Reading {
   sensorId: string;
   metric: Metric;
