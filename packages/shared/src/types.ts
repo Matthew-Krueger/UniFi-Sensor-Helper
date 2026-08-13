@@ -132,6 +132,15 @@ export interface LatchStateRecord {
   updatedAt: number;
 }
 
+export type LatchTransitionType = "armed" | "fired" | "resolved" | "cleared-before-fire";
+
+export interface LatchTransitionRecord {
+  id: string;
+  latchId: string;
+  type: LatchTransitionType;
+  timestamp: number;
+}
+
 export interface Reading {
   sensorId: string;
   metric: Metric;

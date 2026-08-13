@@ -1,9 +1,17 @@
 import { desc, eq, inArray } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import type { Latch, LatchStateRecord, ProtectConsole, Sensor, WebhookDelivery, WebhookTarget } from "@unifi-sensor-latch/shared";
+import type {
+  Latch,
+  LatchStateRecord,
+  LatchTransitionRecord,
+  ProtectConsole,
+  Sensor,
+  WebhookDelivery,
+  WebhookTarget,
+} from "@unifi-sensor-latch/shared";
 import { getDb } from "./db";
 import * as schema from "./schema";
-import { latches, latchState, protectConsoles, sensors, webhookDeliveries } from "./schema";
+import { latches, latchState, latchTransitions, protectConsoles, sensors, webhookDeliveries } from "./schema";
 
 // Bounds webhook_deliveries growth per rule — pruned on every insert (see
 // recordWebhookDelivery) rather than via a scheduled job, since pruning on
@@ -315,5 +323,31 @@ export class ConfigStore {
         set: { state: record.state, armedAt: record.armedAt, firedAt: record.firedAt, updatedAt: record.updatedAt },
       })
       .run();
+  }
+
+  recordLatchTransition(latchId: string, type: LatchTransitionRecord["type"], timestamp: number): void {
+    this.db
+      .insert(latchTransitions)
+      .values({ id: crypto.randomUUID(), latchId, type, timestamp })
+      .run();
+  }
+
+  getLatchTransitions(latchId: string): LatchTransitionRecord[] {
+    return this.db
+      .select()
+      .from(latchTransitions)
+      .where(eq(latchTransitions.latchId, latchId))
+      .orderBy(latchTransitions.timestamp)
+      .all()
+      .map((row) => ({
+        id: row.id,
+        latchId: row.latchId,
+        type: row.type as LatchTransitionRecord["type"],
+        timestamp: row.timestamp,
+      }));
+  }
+
+  clearLatchTransitions(latchId: string): void {
+    this.db.delete(latchTransitions).where(eq(latchTransitions.latchId, latchId)).run();
   }
 }

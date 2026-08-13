@@ -141,3 +141,72 @@ describe("ConfigStore latch state persistence", () => {
     expect(latch?.webhook).toEqual({ kind: "custom", url: "https://example.invalid/legacy", method: "POST" });
   });
 });
+
+describe("ConfigStore latch transitions", () => {
+  test("recordLatchTransition then getLatchTransitions returns rows ordered by timestamp ascending", () => {
+    const store = freshStore();
+    seedLatch(store, "freezer-temp");
+
+    store.recordLatchTransition("freezer-temp", "armed", 2000);
+    store.recordLatchTransition("freezer-temp", "fired", 1000);
+
+    const rows = store.getLatchTransitions("freezer-temp");
+    expect(rows.map((r) => r.type)).toEqual(["fired", "armed"]);
+    expect(rows.map((r) => r.timestamp)).toEqual([1000, 2000]);
+  });
+
+  test("getLatchTransitions only returns rows for the requested latch", () => {
+    const store = freshStore();
+    seedLatch(store, "latch-a");
+    seedLatchWithSensor(store, "latch-b", "sensor-2", "console-2");
+
+    store.recordLatchTransition("latch-a", "armed", 1000);
+    store.recordLatchTransition("latch-b", "armed", 1000);
+
+    expect(store.getLatchTransitions("latch-a")).toHaveLength(1);
+  });
+
+  test("clearLatchTransitions deletes all rows for that latch only", () => {
+    const store = freshStore();
+    seedLatch(store, "latch-a");
+    seedLatchWithSensor(store, "latch-b", "sensor-2", "console-2");
+
+    store.recordLatchTransition("latch-a", "armed", 1000);
+    store.recordLatchTransition("latch-a", "fired", 2000);
+    store.recordLatchTransition("latch-b", "armed", 1000);
+
+    store.clearLatchTransitions("latch-a");
+
+    expect(store.getLatchTransitions("latch-a")).toHaveLength(0);
+    expect(store.getLatchTransitions("latch-b")).toHaveLength(1);
+  });
+});
+
+// A second independent console/sensor/latch chain, for tests that need two
+// distinct latches (seedLatch alone always reuses console-1/sensor-1).
+function seedLatchWithSensor(store: ConfigStore, latchId: string, sensorId: string, consoleId: string): void {
+  store.upsertProtectConsole({
+    id: consoleId,
+    name: "Second site NVR",
+    host: "10.0.0.2",
+    apiKey: "test-key-2",
+    apiBaseUrlOverride: null,
+    defaultWebhookId: null,
+    downAlertEnabled: false,
+    downAlertDurationSeconds: null,
+    downAlertWebhook: null,
+    downAlertResolvedWebhook: null,
+    createdAt: 0,
+  });
+  store.upsertSensor({ id: sensorId, consoleId, name: "Second Sensor", metrics: ["temperature"] });
+  store.upsertLatch({
+    id: latchId,
+    name: null,
+    sensorId,
+    metric: "temperature",
+    condition: { type: "above", threshold: 55, hysteresis: { mode: "manual", clearThreshold: 38 } },
+    durationSeconds: 600,
+    webhook: { kind: "custom", url: "https://example.invalid/webhook", method: "POST" },
+    enabled: true,
+  });
+}
