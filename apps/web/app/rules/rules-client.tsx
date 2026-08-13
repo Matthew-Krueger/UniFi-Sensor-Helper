@@ -377,6 +377,7 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   const [historyRuleId, setHistoryRuleId] = React.useState<string | null>(null);
   const [detailsRuleId, setDetailsRuleId] = React.useState<string | null>(null);
   const [testingId, setTestingId] = React.useState<string | null>(null);
+  const [copyingId, setCopyingId] = React.useState<string | null>(null);
   const [form, setForm] = React.useState<FormState>(emptyForm);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -730,6 +731,18 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
   async function deleteRule(id: string) {
     await fetch(`/api/latches/${id}`, { method: "DELETE" });
     await load();
+  }
+
+  async function copyRule(id: string) {
+    setCopyingId(id);
+    try {
+      const res = await fetch(`/api/latches/${id}/copy`, { method: "POST" });
+      if (res.ok) {
+        await load();
+      }
+    } finally {
+      setCopyingId(null);
+    }
   }
 
   async function runTest(id: string) {
@@ -1312,6 +1325,14 @@ export function RulesClient({ initial }: { initial: RulesInitialData }) {
                       }}
                     >
                       Edit
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={copyingId === detailsRule.id}
+                      onClick={() => copyRule(detailsRule.id)}
+                    >
+                      {copyingId === detailsRule.id ? "Copying…" : "Copy"}
                     </Button>
                     <Button
                       variant="outline"
