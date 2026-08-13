@@ -5,13 +5,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { Latch, LatchStateRecord, LatchStats, Sensor } from "@unifi-sensor-latch/shared";
+import type { Latch, LatchStateRecord, LatchStats, LatchStatsWindowKey, Sensor } from "@unifi-sensor-latch/shared";
 import { absoluteTimeLabel, formatDuration, preciseAgoLabel } from "@/lib/format";
-import { conditionSummary } from "@unifi-sensor-latch/shared";
-import { metricUnitSuffix, toDisplayCondition } from "@/lib/units";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { sensorsResponseSchema } from "@/lib/apiSchemas";
 import { LiveRelativeTime } from "@/components/live-relative-time";
+import { ruleDescription } from "@/lib/ruleDescription";
 
 // Client Component polling /api/state every few seconds — SPEC.md section 5:
 // latch state changes on the order of minutes, so polling is simpler than a
@@ -136,7 +135,7 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
             <Card key={rule.id}>
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">{sensorName(rule.sensorId)}</CardTitle>
+                  <CardTitle className="text-base">{rule.name || "Unnamed"}</CardTitle>
                   <Badge variant={label as "idle" | "armed" | "fired"}>{label}</Badge>
                 </div>
                 {/* The "X ago" suffix is computed from a live clock (see
@@ -145,13 +144,7 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
                     moment later will almost always differ by a second or
                     two — that's expected, not a bug. */}
                 <CardDescription title={sinceTimestamp ? absoluteTimeLabel(sinceTimestamp) : undefined}>
-                  {rule.metric}{" "}
-                  {rule.metric === "leak"
-                    ? "detected"
-                    : conditionSummary(
-                        toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
-                        metricUnitSuffix(rule.metric, temperatureUnit)
-                      )}
+                  {ruleDescription(rule, sensorName(rule.sensorId), temperatureUnit)}
                   {sinceTimestamp && (
                     <>
                       {" · "}
@@ -161,29 +154,13 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
                 </CardDescription>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground">
-                Arms for {formatDuration(rule.durationSeconds)} before firing.
-                {!rule.enabled && <div className="mt-1 text-amber-600 dark:text-amber-400">Disabled</div>}
+                {!rule.enabled && <div className="text-amber-600 dark:text-amber-400">Disabled</div>}
                 {statsByLatchId[rule.id] && (
-                  <div className="mt-3 text-xs text-muted-foreground">
-                    <div className="grid grid-cols-6 gap-1">
-                      <div></div>
-                      <div className="text-center font-medium">1d</div>
-                      <div className="text-center font-medium">7d</div>
-                      <div className="text-center font-medium">30d</div>
-                      <div className="text-center font-medium">365d</div>
-                      <div className="text-center font-medium">All</div>
-                      {(["armedCount", "firedCount", "idleCount"] as const).map((field) => (
-                        <StatsRow key={field} label={statLabel(field)} stats={statsByLatchId[rule.id]!} field={field} format={(n) => String(n)} />
-                      ))}
-                      <StatsRow label="Time armed" stats={statsByLatchId[rule.id]!} field="armedSeconds" format={formatDuration} />
-                      <StatsRow label="Time fired" stats={statsByLatchId[rule.id]!} field="firedSeconds" format={formatDuration} />
-                    </div>
-                    {actor && hasRole(actor, "superadmin") && (
-                      <Button variant="outline" size="sm" className="mt-2" onClick={() => clearStats(rule.id, rule.name)}>
-                        Clear stats
-                      </Button>
-                    )}
-                  </div>
+                  <LatchStatsPanel
+                    stats={statsByLatchId[rule.id]!}
+                    canClear={!!actor && hasRole(actor, "superadmin")}
+                    onClear={() => clearStats(rule.id, rule.name)}
+                  />
                 )}
               </CardContent>
             </Card>
@@ -194,10 +171,75 @@ export function DashboardClient({ initial }: { initial: DashboardInitialData }) 
   );
 }
 
-function statLabel(field: "armedCount" | "firedCount" | "idleCount"): string {
-  if (field === "armedCount") return "Armed";
-  if (field === "firedCount") return "Fired";
-  return "Idle";
+// Windows shown in the table. "All time" is dropped from the table itself
+// to cut a column — it's still available via the underlying LatchStats
+// object if it's ever needed elsewhere, it just doesn't need to sit next
+// to the three shorter, more actionable windows every time.
+const TABLE_WINDOWS: LatchStatsWindowKey[] = ["1d", "7d", "30d", "365d"];
+
+// Collapsed by default: the counters/durations are useful but secondary to
+// current status, and showing all of it inline on every card at once was
+// what made the dashboard feel cluttered. One click reveals the full
+// breakdown per rule.
+function LatchStatsPanel({
+  stats,
+  canClear,
+  onClear,
+}: {
+  stats: LatchStats;
+  canClear: boolean;
+  onClear: () => void;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+
+  return (
+    <div className="mt-2 text-xs">
+      <button
+        type="button"
+        className="text-muted-foreground underline-offset-2 hover:underline"
+        onClick={() => setExpanded((value) => !value)}
+      >
+        {expanded ? "Hide stats" : "Show stats"}
+      </button>
+      {expanded && (
+        <div className="mt-2 text-muted-foreground">
+          <div className="grid grid-cols-5 gap-x-2 gap-y-1.5">
+            <div />
+            {TABLE_WINDOWS.map((window) => (
+              <div key={window} className="text-center font-medium">
+                {window}
+              </div>
+            ))}
+            <CountsRow stats={stats} />
+            <StatsRow label="Time armed" stats={stats} field="armedSeconds" format={formatDuration} />
+            <StatsRow label="Time fired" stats={stats} field="firedSeconds" format={formatDuration} />
+          </div>
+          {canClear && (
+            <Button variant="outline" size="sm" className="mt-2" onClick={onClear}>
+              Clear stats
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Armed, fired, and idle counts collapsed into one "3 / 1 / 2" cell per
+// window instead of three separate rows — the three counters read fine
+// together since they're always small integers, and it cuts row count
+// from five down to three.
+function CountsRow({ stats }: { stats: LatchStats }) {
+  return (
+    <>
+      <div title="Armed / fired / idle counts">Armed / fired / idle</div>
+      {TABLE_WINDOWS.map((window) => (
+        <div key={window} className="text-center">
+          {stats[window].armedCount} / {stats[window].firedCount} / {stats[window].idleCount}
+        </div>
+      ))}
+    </>
+  );
 }
 
 function StatsRow({
@@ -214,11 +256,11 @@ function StatsRow({
   return (
     <>
       <div>{label}</div>
-      <div className="text-center">{format(stats["1d"][field])}</div>
-      <div className="text-center">{format(stats["7d"][field])}</div>
-      <div className="text-center">{format(stats["30d"][field])}</div>
-      <div className="text-center">{format(stats["365d"][field])}</div>
-      <div className="text-center">{format(stats.all[field])}</div>
+      {TABLE_WINDOWS.map((window) => (
+        <div key={window} className="text-center">
+          {format(stats[window][field])}
+        </div>
+      ))}
     </>
   );
 }

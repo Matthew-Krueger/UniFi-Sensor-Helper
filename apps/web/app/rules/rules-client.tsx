@@ -23,14 +23,13 @@ import type {
 import {
   DURATION_PRESETS,
   MIN_DURATION_SECONDS,
-  conditionSummary,
   isDurationValid,
   validateCondition,
   validateWebhookTarget,
 } from "@unifi-sensor-latch/shared";
 import { hasRole, useCurrentUser } from "@/lib/useCurrentUser";
 import { metricUnitSuffix, toDisplayCondition, toStoredValue } from "@/lib/units";
-import { absoluteTimeLabel, coarseAgoLabel, formatDuration, preciseAgoLabel } from "@/lib/format";
+import { absoluteTimeLabel, coarseAgoLabel, preciseAgoLabel } from "@/lib/format";
 import {
   WebhookFieldsEditor,
   buildWebhookTarget,
@@ -41,6 +40,7 @@ import {
 import { sensorsResponseSchema, consolesResponseSchema } from "@/lib/apiSchemas";
 import { LiveRelativeTime } from "@/components/live-relative-time";
 import { SensorReportingStatus } from "@/components/sensor-reporting-status";
+import { ruleDescription } from "@/lib/ruleDescription";
 
 // CRUD over /api/latches — "Rule" is the user-facing name for what the
 // domain model (SPEC.md section 4) and API still call a Latch internally;
@@ -189,23 +189,6 @@ function deliveryBadgeVariant(delivery: WebhookDelivery): "good" | "fired" {
 function consoleWebhookLabel(target: Extract<WebhookTarget, { kind: "console" }>, consoles: ProtectConsole[]): string {
   const name = consoles.find((c) => c.id === target.consoleId)?.name ?? "unknown console";
   return `Console: ${name} / ${target.webhookId}`;
-}
-
-// Self-contained plain-English summary of what a rule does — the Rules
-// table's declutter collapses Metric/Condition/Duration into this one
-// sentence (see RulesClient's table below); the exact structured
-// breakdown (condition type, thresholds, hysteresis, duration presets)
-// is still fully editable in the create/edit dialog and viewable in the
-// details dialog, this is just the at-a-glance version.
-function ruleDescription(rule: RuleRow, sensorLabel: string, temperatureUnit: "C" | "F"): string {
-  if (rule.metric === "leak") {
-    return `If ${sensorLabel} detects a leak for ${formatDuration(rule.durationSeconds)}`;
-  }
-  const summary = conditionSummary(
-    toDisplayCondition(rule.condition, rule.metric, temperatureUnit),
-    metricUnitSuffix(rule.metric, temperatureUnit)
-  );
-  return `If ${sensorLabel} is ${summary} for ${formatDuration(rule.durationSeconds)}`;
 }
 
 function formatTick(n: number): string {
